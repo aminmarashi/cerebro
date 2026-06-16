@@ -39,7 +39,11 @@ the PR work, `rg` recommended).
   where they stopped; blocked children pause with a question instead
   of guessing.
 * **It learns you** — durable preferences carried into every future
-  session, across repos.
+  session, across repos, plus local prompt overlays to tune any prompt
+  surface without forking.
+* **It improves itself** — `cerebro improve` mines its own accumulated
+  traces for problems that recur across runs and proposes the smallest
+  fixes back into the harness, routed through local overlays.
 
 How to drive each of these: **[docs/USAGE.md](docs/USAGE.md)**.
 How it works inside — design, decisions, constraints:
