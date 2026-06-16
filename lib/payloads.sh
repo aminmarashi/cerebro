@@ -37,9 +37,21 @@ cerebro_codex_readonly_note() {
 # The plan-audit prompt fed to the read-only `codex exec` child spawned by
 # `cerebro audit` (the plan / spec / context blocks are appended after it).
 cerebro_audit_prompt() {
+  local out; out="$(printf '%s\n\n%s' \
+    "$(cerebro_codex_readonly_note)" \
+    "$(cat "$(cerebro_payloads_dir)/prompts/audit.md")")"
+  local ov; ov="$(overlay_body grader)"
+  [[ -n "$ov" ]] && out="$(printf '%s\n\n# Local grader overlay\n%s' "$out" "$ov")"
+  printf '%s\n' "$out"
+}
+
+# The hill-climbing analysis prompt fed to the read-only `codex exec` child
+# spawned by `cerebro improve` (the trace-corpus locations / context are
+# appended after it). Mirrors cerebro_audit_prompt.
+cerebro_improve_prompt() {
   printf '%s\n\n%s\n' \
     "$(cerebro_codex_readonly_note)" \
-    "$(cat "$(cerebro_payloads_dir)/prompts/audit.md")"
+    "$(cat "$(cerebro_payloads_dir)/prompts/improve.md")"
 }
 
 # ----- child agent prompts --------------------------------------------------
@@ -66,7 +78,13 @@ child_sys_prompt() {
     execute|apply-review|doc-write) ;;
     *) die "child_sys_prompt: unknown role: $role" ;;
   esac
-  printf '%s\n\n%s' "$(cat "$f")" "$(child_noninteractive_note)"
+  local out; out="$(printf '%s\n\n%s' "$(cat "$f")" "$(child_noninteractive_note)")"
+  # Append the user-owned local overlay for this role, if any, so a user can
+  # tune a child role prompt without forking. This feeds both the original
+  # spawn and `cerebro answer` (which re-passes the identical system prompt).
+  local ov; ov="$(overlay_body "$role")"
+  [[ -n "$ov" ]] && out="$(printf '%s\n\n# Local overlay\n%s' "$out" "$ov")"
+  printf '%s' "$out"
 }
 
 # child_allowed_tools <role> -- the --allowedTools list for a claude child

@@ -10,3 +10,6 @@ CEREBRO_REVIEW_MODEL="${CEREBRO_REVIEW_MODEL:-}"
 CEREBRO_TIMEOUT="${CEREBRO_TIMEOUT:-0}"   # 0/empty/none/unlimited = no cap
 CEREBRO_CODEX_CMD="${CEREBRO_CODEX_CMD:-codex}"
 CEREBRO_DEBUG="${CEREBRO_DEBUG:-0}"
+# Max chars in a single harness overlay file. Larger than learnings' cap since
+# overlays aren't all carried in one system message, but still bounded.
+CEREBRO_OVERLAY_CAP="${CEREBRO_OVERLAY_CAP:-4000}"

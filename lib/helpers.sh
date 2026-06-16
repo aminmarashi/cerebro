@@ -318,7 +318,7 @@ build_timeout_cmd() {
 # without churn.
 materialise_home() {
   mkdir -p "$CEREBRO_HOME/.claude" "$CEREBRO_HOME/sessions" \
-    "$CEREBRO_HOME/templates" \
+    "$CEREBRO_HOME/templates" "$CEREBRO_HOME/overlays" \
     || die "cannot create $CEREBRO_HOME"
 
   write_if_changed "$CEREBRO_HOME/system-prompt.md" "$(cerebro_system_prompt)"
