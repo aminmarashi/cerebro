@@ -87,7 +87,8 @@ prompt text; the harness physically lacks the tools.
 
 *Consequence:* most cerebro "features" — the plan-first default, the
 blast-radius audit, multi-plan suites, the spec discipline, the
-preference-learning loop — are **policies encoded in the system
+preference-learning loop, the plain-English readable companion written
+beside every technical plan — are **policies encoded in the system
 prompt**, not code paths. The authoritative copy lives at
 `lib/payloads/system-prompt.md`; it is materialised to
 `~/.cerebro/system-prompt.md` on every launch (see decision 7).
@@ -146,6 +147,8 @@ There is no database and no in-memory state that matters. The layout:
     spec.md                        # current requirements of record
     spec-history.jsonl             # append-only history of spec versions
     plans/*.md                     # orchestrator-written plans
+                                   #   (each <name>.md has a <name>-readable.md
+                                   #    plain-English companion)
     audits/*.md                    # audit child findings
     children/*.jsonl               # stream-json log of every child
     children/*.steering.md         # live steering from --pair runs
