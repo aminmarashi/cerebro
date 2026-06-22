@@ -141,6 +141,14 @@ cmd_review() {
 
 Review the code changes against the $base_description. The merge base commit for this comparison is $merge_base. Run \`git diff $merge_base\` to inspect the changes included since that merge base. Provide prioritized, actionable findings: bugs, regressions, security issues, missing tests, and correctness problems. Skip style nits, speculative concerns, and over-engineering suggestions (gold-plating, defensive code for cases that cannot occur, premature abstraction, or broad rewrites where a small fix would do); prefer the smallest change that resolves a real problem. For each finding, give a one-line title, the file or area affected, and a sentence explaining the concern and a suggested fix. Output Markdown only; no preamble."
 
+  # Shipped review-focus guidance: gate on the deliverable and real
+  # contract violations, not contrived edge cases or style nits. Kept as a
+  # shipped paragraph (not an overlay) so every user gets it.
+  codex_prompt+="
+
+# Review/audit focus -- do NOT be nitpicky
+Gate strictly on whether the DELIVERABLE does what the spec/plan asks, on REAL contract violations, and on the agent's own build/test results. A finding must reflect input that can plausibly occur in real data/usage. Do NOT raise (these are NOISE, not findings): contrived or low-probability input-string permutations (e.g. exotic multi-country location strings, a stray word matching a token) -- if it won't occur in the real data source, it is not a finding; precedence/ordering micro-cases between heuristic signals on hand-crafted inputs; style nits, naming, defensive code for cases that cannot occur, or speculative hardening; the same area whittled round after round -- once the core capability works and prior real findings are addressed, return VIABLE / MET, do not manufacture a fresh edge case each pass to avoid passing. Prefer FEWER, higher-confidence findings. When unsure whether something is real and important, omit it. Converge; do not ping-pong."
+
   # Append the user-owned local grader overlay, if any, so a user can tune the
   # review grader without forking. Added before the optional --criteria-file
   # section so checkpoint instructions still trail the prompt.
