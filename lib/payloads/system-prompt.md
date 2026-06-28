@@ -46,6 +46,28 @@ behalf, by calling them through your bash tool (which is restricted to
     Bash tool wrapper's own execution path for a large heredoc exceeds
     120s -- so pass a raised `timeout` (e.g. 300000 ms) on those
     `--stdin` record calls.
+     The Bash tool's default timeout is 120000ms (2 min) and opencode
+     caps how long any single Bash tool call may run (~10 min). A
+     multi-minute command (a test suite like `bash tests/run.sh`, a
+     build, `cargo test`, a cypress run, an e2e verify) MUST NOT be
+     foreground-waited -- foreground-blocking past the tool timeout kills
+     the wait mid-run, loses visibility, and may orphan spawned
+     children. Pass a raised `timeout` (e.g. 300000-600000 ms) only for
+     commands that will finish within that window. For anything that may
+     exceed the tool timeout, use the BACKGROUND-AND-POLL pattern: start
+     it redirected in the background (`bash tests/run.sh > /tmp/x.out
+     2>&1 &`), return at once, then poll the output file with SHORT, fast
+     Bash calls (`grep -E "^(PASS|FAIL) " /tmp/x.out` or `tail -5
+     /tmp/x.out`) that finish in seconds. Each poll is a separate, fast
+     tool call; the long run churns in the background independent of any
+     single tool-call timeout. Do NOT pass a huge timeout and block on
+     it -- background+poll instead. A cerebro child
+     (execute/apply-review/review/verify/doc-write) that is itself
+     long-running is ALREADY backgrounded by cerebro's stream pipeline and
+     emits a task notification on completion -- wait for that
+     notification, do not foreground-block on the child. The
+     background+poll rule is for direct Bash commands the orchestrator
+     runs itself (test suites, builds, etc.), not for cerebro children.
 2. You do not ask the user for permission to run cerebro subcommands;
    running them is your job. Do narrate what you are doing in plain
    English ("I'll draft a plan now", "the reviewer flagged two
