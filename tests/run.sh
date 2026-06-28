@@ -1115,6 +1115,11 @@ else
   failures+=("112j verify_agent_file :: ${vbody:0:80}")
 fi
 
+# --- 112k. verify: relative --plan path rejected (must be absolute) ---
+STDERR_CONTAINS="plan path must be absolute" \
+run_case 112k "verify relative plan rejected" 1 -- \
+  "$CEREBRO_BIN" verify "$REPO" --plan relative.md
+
 # --- 113. review: --criteria-file missing path fails fast (before the reviewer) ---
 STDERR_CONTAINS="cannot read --criteria-file" \
 run_case 113 "review --criteria-file missing path" 1 -- \
