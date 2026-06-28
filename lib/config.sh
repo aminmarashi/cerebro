@@ -21,6 +21,12 @@ CEREBRO_MODEL="${CEREBRO_MODEL:-github-copilot/gemini-3.1-pro-preview}"
 # PATH even when the editing children run under claude.
 CEREBRO_REVIEW_MODEL="${CEREBRO_REVIEW_MODEL:-github-copilot/gpt-5.5}"
 CEREBRO_TIMEOUT="${CEREBRO_TIMEOUT:-0}"   # 0/empty/none/unlimited = no cap
+# Inactivity timeout (seconds) for the child stream parser: if a spawned child
+# produces no new stream event for this window, parse_stream.py exits 5 with a
+# "child stalled" diagnostic instead of blocking forever. A slow-but-progressing
+# child (periodic events) is NOT killed -- the timer resets on every line. 0
+# disables the inactivity bound (legacy blocking read). Default 180s.
+CEREBRO_CHILD_IDLE_TIMEOUT="${CEREBRO_CHILD_IDLE_TIMEOUT:-180}"
 CEREBRO_OPENCODE_CMD="${CEREBRO_OPENCODE_CMD:-opencode}"
 CEREBRO_CLAUDE_CMD="${CEREBRO_CLAUDE_CMD:-claude}"
 CEREBRO_DEBUG="${CEREBRO_DEBUG:-0}"

@@ -29,8 +29,23 @@ cmd_spec() {
 }
 
 spec_set() {
-  local text="${*:-}"
-  [[ -n "${text//[[:space:]]/}" ]] || die "usage: cerebro spec set \"<specification and requirements>\""
+  local use_stdin=0
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --stdin) use_stdin=1; shift ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  local text=""
+  if (( ${#args[@]} > 0 )); then text="${args[*]}"; fi
+  (( use_stdin )) && [[ -n "$text" ]] \
+    && die "spec set: --stdin and an inline body are mutually exclusive"
+  if (( use_stdin )); then
+    text="$(cat)" || die "spec set: failed to read body from stdin"
+  fi
+  [[ -n "${text//[[:space:]]/}" ]] \
+    || die "usage: cerebro spec set \"<specification and requirements>\" [--stdin]"$'\n'"  # --stdin reads the body from stdin (preferred for large specs)"
   local sf hf ts
   sf="$(spec_file)"; hf="$(spec_history_file)"
   ts="$(ts_iso)"

@@ -21,6 +21,7 @@ main() {
     execute) shift; cmd_execute "$@" ;;
     review) shift; cmd_review "$@" ;;
     apply-review) shift; cmd_apply_review "$@" ;;
+    verify) shift; cmd_verify "$@" ;;
     doc-write) shift; cmd_doc_write "$@" ;;
     answer) shift; cmd_answer "$@" ;;
     steer) shift; cmd_steer "$@" ;;

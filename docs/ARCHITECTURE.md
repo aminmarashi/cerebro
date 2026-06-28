@@ -29,7 +29,7 @@ you (terminal)
 orchestrator — interactive `claude` session
   cwd = $CEREBRO_HOME (~/.cerebro)
   tools: Read, Grep, Glob, WebSearch, WebFetch,
-         mcp__playwright__*, Bash(cerebro:*)        ← nothing else
+         Bash(cerebro:*)        ← nothing else (NO browser/Playwright)
   │
   │  Bash: `cerebro <subcommand> <repo-abs-path> ...`
   ▼
@@ -38,6 +38,7 @@ cerebro CLI (bash, sourced modules)
   │     execute       claude -p   Read/Edit/Write/Bash...  cwd=<repo>
   │     apply-review  claude -p   Read/Edit/Write/Bash...  cwd=<repo>
   │     doc-write     claude -p   Read/Edit/Write/Bash...  cwd=<repo>
+  │     verify        opencode    edit/bash/web + browser   cwd=<repo>
   │     audit         codex exec  --sandbox read-only      cwd=<repo>
   │     review        codex exec  --sandbox read-only      cwd=<repo>
   ├── read-only bridges (no agent spawned)
@@ -60,6 +61,16 @@ Three kinds of work, three mechanisms:
   `doc-write` children (and the orchestrator's `gh`-driven PR flow runs
   inside those children too). The reviewer (`codex`) is sandboxed
   read-only by construction.
+
+Visual / end-to-end verification is delegated to a `verify` child (on the
+reviewer model, which has browser capability) because the orchestrator
+has no browser/Playwright tool. `cerebro verify` is a HIGH-LEVEL
+REQUIREMENTS / ACCEPTANCE check from the big picture -- it drives the
+real running app the plan delivers and judges whether the observable
+behaviours are present and working when used for real. It is NOT a
+second static code review (that is `review` / `audit`'s job); it does
+not raise style nits, naming, or contrived edge cases. Its report ends
+with `VERIFY: PASS|FAIL|BLOCKED`.
 
 ## Architectural decisions
 

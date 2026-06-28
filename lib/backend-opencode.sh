@@ -39,8 +39,9 @@ backend_opencode_child_run() {
   fi
 
   backend_opencode_child_run_opts "$agent" "$resume" "$model"
+  local err_log="${child_log%.log}.err.log"
   ( cd "$cwd" && env -u CEREBRO_SESSION_ID -u CEREBRO_SESSION_DIR \
-      "${TIMEOUT_CMD[@]}" "$CEREBRO_OPENCODE_CMD" "${CHILD_RUN_OPTS[@]}" "$prompt" </dev/null 2>/dev/null \
+      "${TIMEOUT_CMD[@]}" "$CEREBRO_OPENCODE_CMD" "${CHILD_RUN_OPTS[@]}" "$prompt" </dev/null 2>"$err_log" \
       | tee "$child_log" \
       | python3 "$CEREBRO_LIB_DIR/python/parse_stream.py" \
           "$msg_capture" "$id_capture" "$store_file" "$ckey" )
@@ -52,7 +53,7 @@ backend_opencode_child_run() {
 # and audit share one read-only reviewer agent.
 backend_opencode_child_agent_name() {
   case "$1" in
-    execute|apply-review|doc-write) printf 'cerebro-%s\n' "$1" ;;
+    execute|apply-review|doc-write|verify) printf 'cerebro-%s\n' "$1" ;;
     review|audit) printf 'cerebro-reviewer\n' ;;
     *) die "backend_opencode_child_agent_name: unknown role: $1" ;;
   esac
@@ -66,7 +67,7 @@ backend_opencode_child_provider() { printf 'opencode\n'; }
 # `cerebro answer` accepts for an opencode child.
 backend_opencode_answerable_provider() {
   case "$1" in
-    execute|apply-review|doc-write) printf 'opencode:%s\n' "$1" ;;
+    execute|apply-review|doc-write|verify) printf 'opencode:%s\n' "$1" ;;
     *) die "backend_opencode_answerable_provider: unknown role: $1" ;;
   esac
 }

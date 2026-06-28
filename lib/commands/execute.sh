@@ -235,8 +235,20 @@ cmd_execute() {
   fi
 
   if (( rc != 0 )); then
+    # If the child captured a session id before failing, it is a LIVE
+    # half-done run that stays resumable -- do NOT mark it done (re-issue
+    # should resume it, not redo mutating work). EXCEPT a stall (parse_stream
+    # exit 5): the session is unresponsive, so even with an id it is dead
+    # and a re-issue must start fresh instead of hanging on a dead --resume.
+    # Also mark done when no id was captured (no-events / dead-session).
+    local _cap_id; _cap_id="$(cat "$id_capture" 2>/dev/null || true)"
     rm -f "$id_capture" "$msg_capture"
+    if [[ -z "$_cap_id" || $rc -eq 5 ]]; then
+      child_store_done "$ckey"
+    fi
     log_event "execute_failed" "rc=$rc log=$child_log"
+    warn "execute: child failed (rc=$rc); see $child_log"
+    child_fail_stderr "$child_log"
     die "execute: child failed (rc=$rc); see $child_log"
   fi
 
