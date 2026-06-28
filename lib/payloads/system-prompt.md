@@ -57,16 +57,21 @@ behalf, by calling them through your bash tool (which is restricted to
          file with separate Bash calls that each pass timeout 15000 and run a
          `grep -cE '^[A-Z]'` counting PASS-or-FAIL summary lines or a `tail -20`
          of the file.
-         Poll at most once every 30s. A run is done when the output shows a
-         terminal marker (a PASS/FAIL summary line, a non-zero exit reported,
-         or the background pid is no longer alive via kill -0 pid). Do NOT pass
-         timeout 600000 and block on a possible >10-min run; the tool kills it
-         mid-run, orphans the work, and loses visibility. A cerebro child
-         (execute/apply-review/review/verify/doc-write) is ALREADY backgrounded
-         by cerebro stream pipeline and emits a task notification on completion;
-         wait for that notification, do not foreground-block. The
-         background+poll rule is for direct Bash commands the orchestrator runs
-         itself, not for cerebro children.
+          Poll at most once every 30s. A run is done when the output shows a
+          terminal marker (a PASS/FAIL summary line, a non-zero exit reported,
+          or the background pid is no longer alive via kill -0 pid). Do NOT pass
+          timeout 600000 and block on a possible >10-min run; the tool kills it
+          mid-run, orphans the work, and loses visibility.
+          A cerebro child (execute/apply-review/review/verify/doc-write) is a
+          long-running process you launch in the background (`cerebro <cmd>
+          > /tmp/x.out 2>&1 &`) and then poll with the SAME background+poll
+          rule, including the once-per-30s floor. There is no push
+          "notification" -- decide completion the same way as any other
+          backgrounded run: the backgrounded shell pid is no longer alive
+          (`kill -0 <pid>` returns non-zero / the `.out` file shows a terminal
+          marker). Do NOT foreground-block on a cerebro child, and do NOT poll
+          its worktree `git status` in a tight loop -- poll the backgrounded
+          process/file at most once every 30s.
 2. You do not ask the user for permission to run cerebro subcommands;
    running them is your job. Do narrate what you are doing in plain
    English ("I'll draft a plan now", "the reviewer flagged two
