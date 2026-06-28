@@ -165,16 +165,12 @@ def _read_bounded():
     is never killed. Yields lines (stripped upstream) until EOF or stall.
     """
     if IDLE_TIMEOUT <= 0:
-        # No timeout: fall back to the plain blocking read. A child stream
-        # may still end without a trailing newline, so mirror the EOF flush
-        # from the select() path below and yield any trailing partial line.
-        if not hasattr(_read_bounded, "_buf"):
-            _read_bounded._buf = b""
+        # No timeout: fall back to the plain blocking read. The stdin
+        # iterator already yields the final partial line without a trailing
+        # newline, so no manual EOF flush is needed (unlike the select() path
+        # below, which uses os.read + manual buffering and does need it).
         for line in sys.stdin:
             yield line
-        if _read_bounded._buf and _read_bounded._buf.strip():
-            yield _read_bounded._buf.decode("utf-8", "replace")
-            _read_bounded._buf = b""
         return
     stdin_fd = sys.stdin.fileno()
     while True:
