@@ -95,7 +95,7 @@ child_sys_prompt() {
   local role="$1"
   local f="$(cerebro_payloads_dir)/prompts/$role.md"
   case "$role" in
-    execute|apply-review|doc-write) ;;
+    execute|apply-review|doc-write|verify) ;;
     *) die "child_sys_prompt: unknown role: $role" ;;
   esac
   local out; out="$(printf '%s\n\n%s' "$(cat "$f")" "$(child_noninteractive_note)")"
@@ -129,6 +129,7 @@ child_agent_file() {
     execute)      desc="cerebro execute child: implement a plan in an isolated worktree and open a PR" ;;
     apply-review) desc="cerebro apply-review child: apply review findings or a fix on the current branch" ;;
     doc-write)    desc="cerebro doc-write child: update user-facing docs for a shipped change" ;;
+    verify)       desc="cerebro verify child: high-level requirements/acceptance e2e verification of a shipped change" ;;
     *) die "child_agent_file: unknown role: $role" ;;
   esac
   local out
@@ -147,6 +148,37 @@ EOF
 )
   out="$(printf '%s\n%s\n\n%s' "$out" "$(cat "$f")" "$(child_noninteractive_note)")"
   local ov; ov="$(overlay_body "$role")"
+  [[ -n "$ov" ]] && out="$(printf '%s\n\n# Local overlay\n%s' "$out" "$ov")"
+  printf '%s' "$out"
+}
+
+# verify_agent_file -- the opencode agent markdown for the cerebro verify child.
+# Same capable permission shape as child_agent_file (edit/bash/web/external
+# allow) since it must start servers, rebuild images, and drive a browser; NOT
+# the read-only reviewer clamp. Body = verify.md + noninteractive-note.md +
+# any user-owned local verify overlay. Runs on CEREBRO_REVIEW_MODEL (the
+# reviewer model, which has browser capability) independent of the
+# implementer. Its report is the run's final message; the final line is the
+# VERIFY: PASS|FAIL|BLOCKED contract.
+verify_agent_file() {
+  local out
+  out=$(cat <<'EOF'
+---
+description: cerebro verify child: high-level requirements/acceptance e2e verification of a shipped change
+mode: all
+permission:
+  edit: allow
+  bash: allow
+  webfetch: allow
+  websearch: allow
+  external_directory: allow
+---
+EOF
+)
+  out="$(printf '%s\n%s\n\n%s' "$out" \
+    "$(cat "$(cerebro_payloads_dir)/prompts/verify.md")" \
+    "$(child_noninteractive_note)")"
+  local ov; ov="$(overlay_body verify)"
   [[ -n "$ov" ]] && out="$(printf '%s\n\n# Local overlay\n%s' "$out" "$ov")"
   printf '%s' "$out"
 }

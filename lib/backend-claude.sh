@@ -55,9 +55,10 @@ backend_claude_child_run() {
   fi
 
   backend_claude_child_run_opts "$role" "$resume" "$model"
+  local err_log="${child_log%.log}.err.log"
   ( cd "$cwd" && printf '%s' "$prompt" \
       | env -u CEREBRO_SESSION_ID -u CEREBRO_SESSION_DIR \
-        "${TIMEOUT_CMD[@]}" "$CEREBRO_CLAUDE_CMD" "${CHILD_RUN_OPTS[@]}" 2>/dev/null \
+        "${TIMEOUT_CMD[@]}" "$CEREBRO_CLAUDE_CMD" "${CHILD_RUN_OPTS[@]}" 2>"$err_log" \
       | tee "$child_log" \
       | python3 "$CEREBRO_LIB_DIR/python/parse_stream.py" \
           "$msg_capture" "$id_capture" "$store_file" "$ckey" )
@@ -69,7 +70,7 @@ backend_claude_child_run() {
 # passed via --append-system-prompt, not via an agent file.
 backend_claude_child_agent_name() {
   case "$1" in
-    execute|apply-review|doc-write|review|audit) printf '%s\n' "$1" ;;
+    execute|apply-review|doc-write|review|audit|verify) printf '%s\n' "$1" ;;
     *) die "backend_claude_child_agent_name: unknown role: $1" ;;
   esac
 }
@@ -82,7 +83,7 @@ backend_claude_child_provider() { printf 'claude\n'; }
 # `cerebro answer` accepts for a claude child.
 backend_claude_answerable_provider() {
   case "$1" in
-    execute|apply-review|doc-write) printf 'claude:%s\n' "$1" ;;
+    execute|apply-review|doc-write|verify) printf 'claude:%s\n' "$1" ;;
     *) die "backend_claude_answerable_provider: unknown role: $1" ;;
   esac
 }

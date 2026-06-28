@@ -33,8 +33,24 @@ cmd_learn_note() {
 # stays small enough for the system message.
 cmd_learn_set() {
   require_session
-  local text="${*:-}"
-  [[ -n "${text//[[:space:]]/}" ]] || die "usage: cerebro learn-set \"<consolidated learnings>\""
+  local use_stdin=0
+  local text=""
+  # Collect inline positional args; --stdin is a flag.
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --stdin) use_stdin=1; shift ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  if (( ${#args[@]} > 0 )); then text="${args[*]}"; fi
+  (( use_stdin )) && [[ -n "$text" ]] \
+    && die "learn-set: --stdin and an inline body are mutually exclusive"
+  if (( use_stdin )); then
+    text="$(cat)" || die "learn-set: failed to read body from stdin"
+  fi
+  [[ -n "${text//[[:space:]]/}" ]] \
+    || die "usage: cerebro learn-set \"<consolidated learnings>\" [--stdin]"$'\n'"  # --stdin reads the body from stdin (preferred for large learnings)"
   local n=${#text}
   if (( n > CEREBRO_LEARN_CAP )); then
     die "learn-set: too large (${n} chars > ${CEREBRO_LEARN_CAP}). Active learnings are injected into the orchestrator system prompt -- consolidate to a few short, general bullets."

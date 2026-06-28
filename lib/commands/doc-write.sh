@@ -118,8 +118,14 @@ cmd_doc_write() {
   done
 
   if (( rc != 0 )); then
+    local _cap_id; _cap_id="$(cat "$id_capture" 2>/dev/null || true)"
     rm -f "$id_capture" "$msg_capture"
+    # Mark done on a stall (rc=5, dead session) or when no id was captured;
+    # a half-done run that captured an id stays resumable.
+    [[ -z "$_cap_id" || $rc -eq 5 ]] && child_store_done "$ckey"
     log_event "doc_write_failed" "rc=$rc log=$child_log"
+    warn "doc-write: child failed (rc=$rc); see $child_log"
+    child_fail_stderr "$child_log"
     die "doc-write: child failed (rc=$rc); see $child_log"
   fi
   child_store_done "$ckey"
