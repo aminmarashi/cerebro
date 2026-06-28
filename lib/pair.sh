@@ -3,17 +3,23 @@
 # Sourced by bin/cerebro; not meant to be executed directly.
 
 # ----- pair-programming mode -----------------------------------------------
-# `--pair` on a claude child (plan / execute / apply-review / doc-write) lets the
-# developer WATCH the live session and STEER it. cerebro drives the child through
-# claude's stream-json input (`--input-format stream-json`): it feeds the initial
-# prompt as the first user message, then after each turn waits a short window for
-# steering injected over a named pipe. Another cerebro session watches this one's
-# paired children with `cerebro observe <this-session-id>` (see cmd_observe);
-# `cerebro steer "<message>"` is a one-shot inject -- it writes one instruction to
-# the child and returns at once (no attach, no lock). The child runs to completion;
-# each turn opens a brief steering window (CEREBRO_PAIR_IDLE) and a quiet window
-# finishes it. Steering is recorded as it is injected and folded back so the
-# orchestrator can reconcile it against the spec.
+# `--pair` on a child (execute / apply-review / doc-write) lets the developer
+# WATCH the live session and STEER it. The transport is backend-specific:
+#   opencode -- the child runs under a private headless `opencode serve`; the
+#               pump POSTs prompts + reads SSE
+#   claude    -- the child runs with `--input-format stream-json` stdin; the
+#               pump writes JSON user messages to stdin
+# Either way, after each turn cerebro waits a short window for steering injected
+# over a named pipe; each steering message is forwarded as the child's next
+# turn and recorded. Another cerebro session watches this one's paired children
+# with `cerebro observe <this-session-id>`; `cerebro steer "<message>"` is a
+# one-shot inject. The child runs to completion; a quiet window finishes it.
+# Steering is recorded as it is injected and folded back so the orchestrator can
+# reconcile it against the spec.
+#
+# pair_begin / pair_run / pair_cleanup are dispatched to the active backend
+# (lib/backend.sh -> lib/backend-{opencode,claude}.sh). This file holds only
+# the shared pair helpers + the per-task worktree management.
 
 # pair_label <role> <repo> [branch] -- a stable, human-readable session name
 # for the paired child (shown in cerebro's connect banner).
@@ -38,48 +44,6 @@ pair_banner() {
     printf '  steering, so steer within that window to keep it open and redirect it.\n'
     printf '  your steering goes straight into the child; it never enters the orchestrator chat.\n'
   } >&2
-}
-
-# pair_begin <role> <repo> <branch> <child_log> [resume-id] -- prepare a fresh
-# or resumed paired child. Sets caller-scoped: PAIR_SID (session id), PAIR_OPTS
-# (extra claude flags -- stream-json input, plus a pinned --session-id for a
-# fresh run), PAIR_FIFO (the named pipe `cerebro steer` writes to), PAIR_STEER
-# (the file live steering is recorded to, folded back by pair_report),
-# PAIR_IDLE (seconds of quiet after a turn before the child finishes),
-# PAIR_PGID (file where exec_setsid records the child process group),
-# PAIR_STALL (idle-tier frozen-log threshold), PAIR_STALL_BUSY (in-flight
-# frozen-log threshold), and PAIR_LAUNCH (the child process-group wrapper). On
-# a resume the stored id is reused and the caller's --resume sets the session id.
-pair_begin() {
-  local role="$1" repo="$2" branch="${3:-}" child_log="$4" resume="${5:-}"
-  local label; label="$(pair_label "$role" "$repo" "$branch")"
-  if [[ -n "$resume" ]]; then
-    PAIR_SID="$resume"
-    PAIR_OPTS=(--input-format stream-json)
-  else
-    PAIR_SID="$(mint_uuid)"
-    PAIR_OPTS=(--session-id "$PAIR_SID" --input-format stream-json)
-  fi
-  PAIR_STEER="${child_log%.jsonl}.steering.md"
-  PAIR_FIFO="${child_log%.jsonl}.steer.fifo"
-  PAIR_IDLE="${CEREBRO_PAIR_IDLE:-60}"
-  PAIR_PGID="${child_log%.jsonl}.pgid"
-  PAIR_STALL="${CEREBRO_PAIR_STALL:-180}"
-  # Keep the busy threshold below the common external 8-minute stale reset.
-  PAIR_STALL_BUSY="${CEREBRO_PAIR_STALL_BUSY:-450}"
-  PAIR_LAUNCH=(python3 "$CEREBRO_LIB_DIR/python/exec_setsid.py" "$PAIR_PGID")
-  : > "$PAIR_STEER"
-  rm -f "$PAIR_FIFO" "$PAIR_PGID"
-  mkfifo "$PAIR_FIFO" || die "pair: cannot create steering pipe at $PAIR_FIFO"
-  pair_banner "$role" "$PAIR_SID" "$label" "$PAIR_FIFO"
-}
-
-# pair_cleanup <pair> -- remove the steering pipe and pgid file once the child
-# has exited. The .stalled sidecar is left for diagnostics.
-pair_cleanup() {
-  (( $1 )) || return 0
-  [[ -n "${PAIR_FIFO:-}" ]] && rm -f "$PAIR_FIFO"
-  [[ -n "${PAIR_PGID:-}" ]] && rm -f "$PAIR_PGID"
 }
 
 # pair_stall_marker <child_log> -- path of the pump's authoritative stall sidecar.
@@ -147,22 +111,6 @@ pair_stall_backoff() {
   local d=$(( base * (1 << (n - 1)) ))
   log_event "pair_stall_restart" "attempt=$n backoff=${d}s"
   if (( d > 0 )); then sleep "$d"; fi
-}
-
-# pair_feed <pair> <fifo> <steer> <child_log> <idle_grace> <pgid_file>
-# <stall> <stall_busy> -- stdin carries the initial prompt. Unpaired: pass it
-# through unchanged as claude -p text input (extra args ignored). Paired: hand
-# it to the stream-json input pump (lib/python/pair_pump.py), which emits the
-# prompt as the first user message, holds a steering window open after each
-# turn, and reaps the child process group if the child log freezes.
-pair_feed() {
-  local pair="$1" fifo="$2" steer="$3" child_log="$4" grace="$5" pgid="${6:-}" stall="${7:-}" stall_busy="${8:-}"
-  if (( pair )); then
-    python3 "$CEREBRO_LIB_DIR/python/pair_pump.py" \
-      "$fifo" "$steer" "$child_log" "$grace" "$pgid" "$stall" "$stall_busy"
-  else
-    cat
-  fi
 }
 
 # ----- per-task worktrees --------------------------------------------------

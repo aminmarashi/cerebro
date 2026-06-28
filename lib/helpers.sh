@@ -125,21 +125,24 @@ usage() {
   cat <<'EOF'
 usage:
   cerebro                       # start a new session (interactive chat)
-  cerebro --resume [<id>]       # resume a session (id, or picker if omitted)
+  cerebro --resume [<id>]       # resume a session (id, or most recent if omitted)
   cerebro --observe [<id>]      # watch-and-steer-only session for another's
                                 #   live paired children (id, or auto-pick)
   cerebro list                  # list sessions, newest first
   cerebro --help                # this help
 
-cerebro launches a native interactive `claude` chat configured as an
-orchestrator. The orchestrator drives the plan -> execute -> review loop
-by calling `cerebro <subcommand>` against your repositories on your
-behalf. You stay in the chat -- you don't type the sub-commands yourself.
+cerebro launches a native interactive agent chat -- opencode or claude,
+selected by CEREBRO_BACKEND -- configured as an orchestrator. The
+orchestrator drives the plan -> execute -> review loop by calling
+`cerebro <subcommand>` against your repositories on your behalf. You stay
+in the chat -- you don't type the sub-commands yourself.
 
-The orchestrator's tools are restricted to Read, Grep, Glob, and
-`Bash(cerebro:*)`. Every git/gh/codex action and every file edit happens
-inside a short-lived sub-agent that cerebro spawns; the orchestrator
-itself can't touch repos directly.
+The orchestrator runs with a restricted tool surface: read/grep/glob plus
+bash limited to `cerebro ...` (no edit, no write, no subagent delegation).
+Every git/gh action and every file edit happens inside a short-lived
+sub-agent that cerebro spawns; the orchestrator itself can't touch repos
+directly. The read-only reviewer always runs under opencode on an
+independent model, regardless of the editing backend.
 
 Notes:
   * Interactive-only. cerebro refuses to run under a non-terminal parent
@@ -148,9 +151,9 @@ Notes:
   * Concurrency. cerebro has no concurrency control: it will not stop
     you from running two mutating ops against the same repo at once,
     within or across sessions. Sequence your own mutating work.
-  * No chat/PR/repo-specific flags are ever passed to `claude` or
-    `codex`. The orchestrator addresses repos by absolute path as the
-    first positional arg to its sub-agent tools.
+  * No chat/PR/repo-specific flags are ever passed to the agent CLI. The
+    orchestrator addresses repos by absolute path as the first positional
+    arg to its sub-agent tools.
   * Paused children. A spawned child (execute / apply-review /
     doc-write) runs non-interactively and cannot ask questions mid-run.
     When it hits a genuine blocker it ends with its question as its final
@@ -160,36 +163,41 @@ Notes:
     continues where it paused.
   * Pair programming. Ask the orchestrator to "pair" (or watch / steer)
     an execute, apply-review, or doc-write child and it adds
-    `--pair`: the child runs with claude's stream-json input so you can
-    WATCH it live from ANOTHER cerebro session -- ask that session to
-    "observe <the paired session's id>" and it narrates, in plain English,
-    what every live paired child is doing (and steers on your command) --
-    and STEER it directly with `cerebro steer "<message>"` (a one-shot
-    inject that returns at once; pass the pipe path from the PAIR MODE
-    banner as a first arg when several run at once). The child runs to
-    completion on its own; after each turn it waits a short window
-    (CEREBRO_PAIR_IDLE, default 60s) for steering, and a quiet window
-    finishes it. If the child stream freezes, cerebro kills only that
-    child process group and restarts it with --resume, bounded by
-    CEREBRO_PAIR_STALL_RETRIES. Each steering message is injected into
-    the running session and recorded; when the child ends the orchestrator
-    folds your steering into the session spec and the upcoming plans, then
-    tells you what changed.
+    `--pair`: the child runs with live steering so you can WATCH it live
+    from ANOTHER cerebro session -- ask that session to "observe <the
+    paired session's id>" and it narrates, in plain English, what every
+    live paired child is doing (and steers on your command) -- and STEER
+    it directly with `cerebro steer "<message>"` (a one-shot inject that
+    returns at once; pass the pipe path from the PAIR MODE banner as a
+    first arg when several run at once). The child runs to completion on
+    its own; after each turn it waits a short window (CEREBRO_PAIR_IDLE,
+    default 60s) for steering, and a quiet window finishes it. If the
+    child stream freezes, cerebro kills only that child and restarts it
+    with --resume, bounded by CEREBRO_PAIR_STALL_RETRIES. Each steering
+    message is injected into the running session and recorded; when the
+    child ends the orchestrator folds your steering into the session
+    spec and the upcoming plans, then tells you what changed.
   * Observe-only sessions. `cerebro --observe [<id>]` opens an interactive
     chat whose sole job is to watch and narrate another session's live
     paired children (and steer them on your command). Its tools are
     narrowed to `cerebro observe`/`steer` plus read-only commands, so it
     makes no direct repo changes -- it is the pair-programming "watcher"
     seat as a first-class session instead of a mode you ask for mid-chat.
+  * Backends. CEREBRO_BACKEND selects the agent CLI for the orchestrator
+    + editing children: `opencode` (default) or `claude`. The reviewer
+    always runs under opencode. The chosen backend is recorded in each
+    session's metadata, so resuming a session always reuses the backend
+    it started with.
 
-Requirements: claude, codex, jq, python3. Child claudes additionally
-need git and gh on PATH for execute / apply-review / doc-write.
+Requirements: opencode, jq, python3 on PATH. When CEREBRO_BACKEND=claude,
+claude is additionally required. Child runs additionally need git and gh
+on PATH for execute / apply-review / doc-write.
 
-Env: CEREBRO_HOME, CEREBRO_MODEL, CEREBRO_REVIEW_MODEL, CEREBRO_TIMEOUT,
-CEREBRO_CODEX_CMD, CEREBRO_CHILD_SESSION_TTL, CEREBRO_PAIR_IDLE,
-CEREBRO_PAIR_STALL, CEREBRO_PAIR_STALL_BUSY, CEREBRO_PAIR_STALL_RETRIES,
-CEREBRO_PAIR_STALL_BACKOFF,
-CEREBRO_DEBUG.
+Env: CEREBRO_HOME, CEREBRO_BACKEND, CEREBRO_MODEL, CEREBRO_REVIEW_MODEL,
+CEREBRO_TIMEOUT, CEREBRO_OPENCODE_CMD, CEREBRO_CLAUDE_CMD,
+CEREBRO_CHILD_SESSION_TTL, CEREBRO_PAIR_IDLE, CEREBRO_PAIR_STALL,
+CEREBRO_PAIR_STALL_BUSY, CEREBRO_PAIR_STALL_RETRIES,
+CEREBRO_PAIR_STALL_BACKOFF, CEREBRO_DEBUG.
 EOF
 }
 
@@ -214,15 +222,28 @@ require_interactive() {
 
 require_deps() {
   local cmd
-  for cmd in claude "$CEREBRO_CODEX_CMD" jq python3; do
+  # opencode is always required: the read-only reviewer runs under it
+  # regardless of the editing backend.
+  for cmd in "$CEREBRO_OPENCODE_CMD" jq python3; do
     command -v "$cmd" >/dev/null 2>&1 || die "missing required command on PATH: $cmd"
   done
+  # The claude backend additionally needs the claude CLI on PATH.
+  if [[ "$(current_backend)" == "claude" ]]; then
+    command -v "$CEREBRO_CLAUDE_CMD" >/dev/null 2>&1 \
+      || die "missing required command on PATH: $CEREBRO_CLAUDE_CMD (CEREBRO_BACKEND=claude)"
+  fi
 }
 
+# cerebro binds an interactive agent process to its session by exporting
+# CEREBRO_SESSION_ID into that process; the backend's bash tool inherits the
+# env, so every `cerebro <subcommand>` the orchestrator runs sees it. A session
+# is therefore always identified by that env var. The claude backend
+# additionally writes a current-session symlink from its UserPromptSubmit hook
+# (the bare `cerebro --resume` fallback when CEREBRO_SESSION_ID is unset).
 require_session() {
   [[ -n "${CEREBRO_SESSION_ID:-}" ]] || {
-    # Bare-resume fallback: hook writes a current-session symlink on
-    # first user prompt, pointing at sessions/<id>/.
+    # Bare-resume fallback (claude backend): hook writes a current-session
+    # symlink on first user prompt, pointing at sessions/<id>/.
     if [[ -L "$CEREBRO_HOME/current-session" ]]; then
       local target
       target="$(readlink "$CEREBRO_HOME/current-session")"
@@ -230,10 +251,16 @@ require_session() {
       [[ -n "$target" ]] && export CEREBRO_SESSION_ID="$target"
     fi
   }
-  [[ -n "${CEREBRO_SESSION_ID:-}" ]] || die "no current cerebro session (CEREBRO_SESSION_ID unset and no current-session symlink). Did you launch this from a `cerebro` shell?"
+  [[ -n "${CEREBRO_SESSION_ID:-}" ]] || die "no current cerebro session (CEREBRO_SESSION_ID unset and no current-session symlink). Did you launch this from a \`cerebro\` shell?"
   CEREBRO_SESSION_DIR="$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID"
   [[ -d "$CEREBRO_SESSION_DIR" ]] || die "session dir missing: $CEREBRO_SESSION_DIR"
   export CEREBRO_SESSION_DIR
+  # Read the recorded backend back so child commands dispatch through the right
+  # implementation even when CEREBRO_BACKEND is not set in this shell (e.g. a
+  # subcommand spawned by an orchestrator whose session started under a
+  # different backend than the current env default).
+  CEREBRO_RESUME_BACKEND="$(session_backend "$CEREBRO_SESSION_DIR")"
+  export CEREBRO_RESUME_BACKEND
 }
 
 mint_uuid() {
@@ -312,27 +339,44 @@ build_timeout_cmd() {
   fi
 }
 
-# Write the payloads (hook.sh, system-prompt.md, settings.local.json) from
-# lib/payloads/ into $CEREBRO_HOME. Idempotent: existing files are overwritten
-# only if their content differs, so subsequent runs see an up-to-date copy
-# without churn.
+# Write the shared home payloads, then the backend-specific extras. The
+# opencode config tree ($CEREBRO_HOME/.opencode: agents + plugin + base config)
+# is ALWAYS written because the read-only reviewer runs under opencode
+# regardless of CEREBRO_BACKEND, and the opencode backend's editing children +
+# orchestrator agent files live there too. The AGENTS.md template is shared
+# (opencode reads AGENTS.md as its project rules file, and the claude backend
+# additionally ships a CLAUDE.md template via its materialise_extras).
+# Idempotent: managed files are overwritten only when their content differs.
+# The orchestrator and observer agents (opencode) are NOT written here -- they
+# carry per-launch learned preferences and are materialised by the launch path.
 materialise_home() {
-  mkdir -p "$CEREBRO_HOME/.claude" "$CEREBRO_HOME/sessions" \
-    "$CEREBRO_HOME/templates" "$CEREBRO_HOME/overlays" \
+  mkdir -p "$CEREBRO_HOME/.opencode/agent" "$CEREBRO_HOME/.opencode/plugin" \
+    "$CEREBRO_HOME/sessions" "$CEREBRO_HOME/templates" "$CEREBRO_HOME/overlays" \
     || die "cannot create $CEREBRO_HOME"
 
+  # Shared system prompt (read by both backends' launch paths).
   write_if_changed "$CEREBRO_HOME/system-prompt.md" "$(cerebro_system_prompt)"
-  write_if_changed "$CEREBRO_HOME/hook.sh" "$(cerebro_hook_script)"
-  chmod +x "$CEREBRO_HOME/hook.sh"
 
-  local settings; settings="$(cerebro_settings_json "$CEREBRO_HOME/hook.sh")"
-  write_if_changed "$CEREBRO_HOME/.claude/settings.local.json" "$settings"
+  # The opencode config tree is shared: the reviewer agent always runs under
+  # opencode, and the opencode editing backend's child agents live here too.
+  write_if_changed "$CEREBRO_HOME/.opencode/opencode.json" "$(cerebro_opencode_json)"
+  write_if_changed "$CEREBRO_HOME/.opencode/plugin/cerebro.js" "$(cerebro_plugin_js)"
+  local role
+  for role in execute apply-review doc-write; do
+    write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-$role.md" \
+      "$(child_agent_file "$role")"
+  done
+  write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-reviewer.md" \
+    "$(reviewer_agent_file)"
 
-  # Templates are user-editable defaults: write only when the file is
-  # missing so a user who customizes ~/.cerebro/templates/AGENTS.md
-  # isn't clobbered on the next launch.
+  # Templates are user-editable defaults: write only when the file is missing
+  # so a user who customizes ~/.cerebro/templates/AGENTS.md isn't clobbered on
+  # the next launch.
   write_if_missing "$CEREBRO_HOME/templates/AGENTS.md" "$(cerebro_default_agents_md)"
-  write_if_missing "$CEREBRO_HOME/templates/CLAUDE.md" "$(cerebro_default_claude_md)"
+
+  # Backend-specific extras (claude: hook + settings.local.json + CLAUDE.md
+  # template; opencode: none beyond the shared tree above).
+  backend_materialise_extras
 }
 
 write_if_changed() {

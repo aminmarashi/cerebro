@@ -4,10 +4,16 @@
 
 # ----- session metadata -----------------------------------------------------
 
+# Unified metadata schema (backends share one shape so resume reads back the
+# recorded backend and reopens the session under it):
+#   {cerebro_session_id, backend, foreign_session_id, created_at, last_touched}
+# `backend` is "opencode" or "claude". `foreign_session_id` holds the
+# provider-assigned conversation id (opencode's own session id, or claude's
+# session id when claude is the backend). The cerebro id is the directory name.
 write_metadata_new() {
   local sess_dir="$1" sid="$2" ts="$3"
-  jq -n --arg sid "$sid" --arg ts "$ts" \
-    '{claude_session_id:$sid, created_at:$ts, last_touched:$ts}' \
+  jq -n --arg sid "$sid" --arg backend "${CEREBRO_BACKEND:-opencode}" --arg ts "$ts" \
+    '{cerebro_session_id:$sid, backend:$backend, foreign_session_id:"", created_at:$ts, last_touched:$ts}' \
     > "$sess_dir/metadata.json"
 }
 
@@ -17,6 +23,43 @@ touch_metadata() {
   tmp="$(mktemp)" || return 0
   jq --arg ts "$ts" '.last_touched = $ts' "$sess_dir/metadata.json" \
     > "$tmp" 2>/dev/null && mv "$tmp" "$sess_dir/metadata.json" || rm -f "$tmp"
+}
+
+# session_backend <sess-dir> -- echo the recorded backend for a session, or
+# the default if the field is missing (older sessions). Never errors.
+session_backend() {
+  local sess_dir="$1"
+  [[ -f "$sess_dir/metadata.json" ]] || { printf '%s' "${CEREBRO_BACKEND:-opencode}"; return 0; }
+  local b; b="$(jq -r '.backend // empty' "$sess_dir/metadata.json" 2>/dev/null)"
+  printf '%s' "${b:-${CEREBRO_BACKEND:-opencode}}"
+}
+
+# session_foreign_id <sess-dir> -- echo the provider-assigned conversation id
+# stored for a session (opencode's own session id under the opencode backend,
+# claude's session id under the claude backend), or empty. Reads both the new
+# `foreign_session_id` field and the legacy `opencode_session_id`/`claude_session_id`
+# names so sessions created by an older single-backend release still resume.
+session_foreign_id() {
+  local sess_dir="$1"
+  [[ -f "$sess_dir/metadata.json" ]] || return 0
+  jq -r '.foreign_session_id // .opencode_session_id // .claude_session_id // empty' \
+    "$sess_dir/metadata.json" 2>/dev/null
+}
+
+# set_session_foreign_id <sess-dir> <id> -- record the provider-assigned id back
+# into metadata (idempotent, atomic). Used by the session-binding plugin/hook
+# and by the claude resume path when claude assigns its own id.
+set_session_foreign_id() {
+  local sess_dir="$1" id="$2"
+  [[ -n "$id" ]] || return 0
+  [[ -f "$sess_dir/metadata.json" ]] || return 0
+  local tmp; tmp="$(mktemp)" || return 0
+  if jq --arg id "$id" '.foreign_session_id = $id' "$sess_dir/metadata.json" \
+      > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$sess_dir/metadata.json"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 # ----- child agent session store -------------------------------------------

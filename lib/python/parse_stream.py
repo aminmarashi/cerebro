@@ -1,11 +1,14 @@
-# Stream-json parser shared by plan / execute / apply-review / doc-write:
-# `parse_stream.py <result_path> <id_path> [store] [key]`. Reads claude
-# stream-json on stdin, emits a one-line tool-call summary on stderr per
-# tool use, captures the final `result` event's text to <result_path> (if
-# non-empty), captures the child's session_id to <id_path> (if non-empty)
-# AND -- when a store file + key are given -- persists it to the store at
-# init so an interrupt stays resumable. Exits non-zero if claude reported
-# anything other than a successful result.
+# Stream parser shared by execute / apply-review / doc-write / answer (both
+# backends): `parse_stream.py <result_path> <id_path> [store] [key]`. Reads the
+# child's JSON event stream on stdin (one event per line), auto-detects whether
+# it is claude stream-json (`system`/`assistant`/`result` with `message.content`)
+# or opencode run-json (`step_start`/`text`/`tool_use`/`step_finish`/`error` with
+# `sessionID` + `part`), emits a one-line tool-call summary on stderr per tool
+# use, captures the final assistant message text to <result_path> (if
+# non-empty), captures the child's session id to <id_path> (if non-empty) AND --
+# when a store file + key are given -- persists it the instant it is first seen
+# so an interrupt stays resumable. Exits non-zero if the child produced no
+# events or reported an error.
 import json, os, sys
 
 sys.dont_write_bytecode = True
@@ -16,10 +19,22 @@ result_path = sys.argv[1] if len(sys.argv) > 1 else ""
 id_path = sys.argv[2] if len(sys.argv) > 2 else ""
 store_file = sys.argv[3] if len(sys.argv) > 3 else ""
 child_key = sys.argv[4] if len(sys.argv) > 4 else ""
-result_text = None
-result_subtype = None
+
 saw_any_event = False
+saw_error = False
+error_msg = ""
+session_id = None
+provider = None
 tool_summary_open = True
+
+# Format-specific state. claude: result_text from the `result` event's `result`
+# field, result_subtype from `subtype`, session id from the `system/init` event.
+# opencode: result_text = text parts of the last step, snapshot at each
+# step_finish, session id from the first event's `sessionID`.
+cur_step_text = []
+result_text = ""
+result_subtype = None
+
 
 def emit_tool_summary(line):
     global tool_summary_open
@@ -31,34 +46,37 @@ def emit_tool_summary(line):
     except (BrokenPipeError, OSError):
         # The orchestrator sometimes previews `cerebro ... 2>&1 | head -6`.
         # A closed preview pipe must not kill this parser, because that would
-        # also make tee stop draining Claude's stdout and freeze the child log.
+        # also make tee stop draining the child's stdout and freeze the child log.
         tool_summary_open = False
         try:
             sys.stderr = open(os.devnull, "w")
         except OSError:
             pass
 
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        ev = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    saw_any_event = True
+
+def record_session(sid):
+    if not sid:
+        return
+    if id_path:
+        try:
+            with open(id_path, "w") as f:
+                f.write(sid)
+        except OSError:
+            pass
+    if store_file and child_key:
+        store_upsert(store_file, child_key,
+                     {"id": sid, "provider": provider, "updated_at": _now_iso()})
+
+
+def handle_claude(ev):
+    global session_id, result_text, result_subtype, saw_error
     t = ev.get("type")
     if t == "system" and ev.get("subtype") == "init":
         sid = ev.get("session_id")
-        if sid and id_path:
-            try:
-                with open(id_path, "w") as f:
-                    f.write(sid)
-            except OSError:
-                pass
-        if sid and store_file and child_key:
-            store_upsert(store_file, child_key,
-                         {"id": sid, "provider": "claude", "updated_at": _now_iso()})
+        if sid and session_id is None:
+            session_id = sid
+            record_session(sid)
+        return
     if t == "assistant":
         for item in ev.get("message", {}).get("content", []) or []:
             if item.get("type") == "tool_use":
@@ -76,19 +94,98 @@ for line in sys.stdin:
                     target = target[:120] + "..."
                 clr = "\r\033[2K" if sys.stderr.isatty() else ""
                 emit_tool_summary(f"{clr}  {name}: {target}\n")
-    elif t == "result":
+        return
+    if t == "result":
         result_subtype = ev.get("subtype")
         result_text = ev.get("result")
+        if result_subtype and result_subtype != "success":
+            saw_error = True
+            error_msg = f"result subtype={result_subtype}"
+
+
+def handle_opencode(ev):
+    global session_id, result_text, saw_error, error_msg
+    sid = ev.get("sessionID")
+    if sid and session_id is None:
+        session_id = sid
+        record_session(sid)
+    t = ev.get("type")
+    part = ev.get("part") or {}
+    if t == "step_start":
+        cur_step_text[:] = []
+    elif t == "text":
+        txt = part.get("text")
+        if isinstance(txt, str):
+            cur_step_text.append(txt)
+    elif t == "tool_use":
+        name = part.get("tool", "?")
+        state = part.get("state") or {}
+        inp = state.get("input") or {}
+        target = (
+            state.get("title") or inp.get("description") or
+            inp.get("filePath") or inp.get("file_path") or
+            inp.get("pattern") or inp.get("path") or inp.get("query") or
+            inp.get("command") or inp.get("url") or ""
+        )
+        if isinstance(target, list):
+            target = " ".join(map(str, target))
+        target = str(target).replace("\n", " ").strip()
+        if len(target) > 120:
+            target = target[:120] + "..."
+        clr = "\r\033[2K" if sys.stderr.isatty() else ""
+        emit_tool_summary(f"{clr}  {name}: {target}\n")
+    elif t == "step_finish":
+        snap = "".join(cur_step_text).strip()
+        if snap:
+            result_text = snap
+    elif t == "error":
+        saw_error = True
+        err = ev.get("error") or {}
+        data = err.get("data") or {}
+        error_msg = data.get("message") or err.get("name") or "unknown error"
+
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        ev = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if not saw_any_event:
+        saw_any_event = True
+        # Auto-detect format from the first event.
+        if ev.get("type") == "step_start" or "sessionID" in ev:
+            provider = "opencode"
+        elif ev.get("type") in ("system", "assistant", "result"):
+            provider = "claude"
+        else:
+            # Unknown shape; guess opencode (the default backend).
+            provider = "opencode"
+    if provider == "claude":
+        handle_claude(ev)
+    else:
+        handle_opencode(ev)
+
+# opencode: a final flush in case the run ended mid-step without a closing
+# step_finish.
+if provider == "opencode":
+    _tail = "".join(cur_step_text).strip()
+    if _tail:
+        result_text = _tail
 
 if not saw_any_event:
-    sys.stderr.write("\ncerebro: claude produced no stream events\n")
+    sys.stderr.write("\ncerebro: child produced no stream events\n")
     sys.exit(2)
-if result_subtype and result_subtype != "success":
-    sys.stderr.write(f"\ncerebro: claude reported result subtype={result_subtype}\n")
+if saw_error:
+    sys.stderr.write(f"\ncerebro: child reported an error: {error_msg}\n")
     sys.exit(4)
 if result_path:
-    if result_text is None:
-        sys.stderr.write(f"\ncerebro: claude did not emit a result event\n")
+    if result_text is None or result_text == "":
+        # claude: a missing result event is a failure; opencode: an empty run
+        # with no text is also a failure (the closing message is what we need).
+        sys.stderr.write("\ncerebro: child did not emit a closing message\n")
         sys.exit(3)
     with open(result_path, "w") as f:
         f.write(result_text)

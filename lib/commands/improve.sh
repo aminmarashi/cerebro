@@ -3,14 +3,15 @@
 # Sourced by bin/cerebro; not meant to be executed directly.
 
 # ----- subcommand: cerebro improve <cerebro-repo> [--context "..."] --------
-# The fourth loop: a read-only `codex exec` mines cerebro's accumulated agent
-# traces under $CEREBRO_HOME for problems that RECUR across runs and proposes
-# the smallest fixes, routed to local overlays / learnings (GitHub-free) or --
-# for whoever maintains the source -- an upstream PR. cwd is the cerebro repo so
-# codex reads/cites the real harness files; the read-only sandbox still reads
-# the trace corpus under $CEREBRO_HOME. ANALYSE/PROPOSE only: findings go to a
-# fixed improvements/improve.md (re-run overwrites) ending with a HILL CLIMB
-# verdict line. Nothing here rewrites the harness.
+# The fourth loop: a read-only opencode reviewer mines cerebro's accumulated
+# agent traces under $CEREBRO_HOME for problems that RECUR across runs and
+# proposes the smallest fixes, routed to local overlays / learnings
+# (GitHub-free) or -- for whoever maintains the source -- an upstream PR. cwd
+# is the cerebro repo so the reviewer reads/cites the real harness files; the
+# read-only sandbox still reads the trace corpus under $CEREBRO_HOME.
+# ANALYSE/PROPOSE only: findings go to a fixed improvements/improve.md (re-run
+# overwrites) ending with a HILL CLIMB verdict line. Nothing here rewrites the
+# harness.
 
 cmd_improve() {
   require_session
@@ -32,7 +33,7 @@ cmd_improve() {
   local imp_dir="$CEREBRO_SESSION_DIR/improvements"
   mkdir -p "$imp_dir"
   local out_path="$imp_dir/improve.md"
-  local err_path="${out_path%.md}.err"
+  local child_log="${out_path%.md}.log"
 
   # Child-session continuity is only for an interrupted/incomplete run. A
   # cleanly finished run gets marked done; re-running starts fresh.
@@ -54,7 +55,7 @@ cmd_improve() {
 The cerebro trace corpus to analyse lives under: $CEREBRO_HOME
   sessions/*/children/*.jsonl   - agent trajectories (model + tool calls)
   sessions/*/transcript.jsonl   - user prompts + milestones
-  sessions/*/audits/*.md, sessions/*/children/codex-*.md - grader feedback
+  sessions/*/audits/*.md, sessions/*/children/review-*.md - grader feedback
   pending-learnings.md, learnings.md, overlays/*.md - applied prefs/overlays"
 
   if [[ -n "$context" ]]; then
@@ -67,60 +68,50 @@ $context
 </context>"
   fi
 
-  # Run with --json so codex streams JSONL events on stdout (the only place it
-  # exposes the resumable thread_id), and -o writes the human-readable findings
-  # to out_path. codex_capture.py persists the thread_id the instant codex
-  # emits it, so an interrupt mid-run leaves a resumable record. cwd is the
-  # repo so codex cites the real harness files; the read-only sandbox still
-  # reads the traces under $CEREBRO_HOME.
-  local codex_opts=(exec --json --sandbox read-only --skip-git-repo-check \
-                    --cd "$repo" -o "$out_path")
-  [[ -n "$CEREBRO_REVIEW_MODEL" ]] && codex_opts+=(--model "$CEREBRO_REVIEW_MODEL")
-  local json_path; json_path="$(mktemp)"
+  # Run the read-only reviewer agent on the independent review model. Its
+  # findings are its final message, captured and written to out_path; the JSON
+  # event stream is tee'd to child_log. cwd is the repo so the reviewer cites
+  # the real harness files; the read-only sandbox still reads the traces under
+  # $CEREBRO_HOME.
+  # The reviewer always runs under opencode regardless of CEREBRO_BACKEND.
+  local agent; agent="$(backend_opencode_child_agent_name audit)"
+  local rc id_capture out_capture; id_capture="$(mktemp)"; out_capture="$(mktemp)"
 
-  local rc run_args
-  if [[ -n "$prior" ]]; then
-    run_args=("${codex_opts[@]}" resume "$prior" "$improve_prompt")
-  else
-    run_args=("${codex_opts[@]}" "$improve_prompt")
-  fi
-  child_store_begin "$ckey" codex improve "$repo" improve "$out_path" "${prior:+preserve-id}"
-  env -u CEREBRO_SESSION_ID -u CEREBRO_SESSION_DIR \
-    "${TIMEOUT_CMD[@]}" "$CEREBRO_CODEX_CMD" "${run_args[@]}" < /dev/null 2> "$err_path" \
-    | python3 "$CEREBRO_LIB_DIR/python/codex_capture.py" "$json_path" "$store_file" "$ckey"
-  rc=${PIPESTATUS[0]}
+  child_store_begin "$ckey" opencode improve "$repo" improve "$child_log" "${prior:+preserve-id}"
+  backend_opencode_child_run 0 "$repo" "$improve_prompt" "$agent" "$prior" \
+    "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+  rc=$?
 
-  # Stale fallback: a resume can be rejected up front because codex GC'd or no
-  # longer recognizes the stored rollout -- the run then fails before emitting
-  # any 'thread.started' event. Retry once fresh ONLY in that early-rejection
-  # case.
-  if [[ -n "$prior" ]] && (( rc != 0 )) \
-     && ! grep -q '"type":"thread.started"' "$json_path"; then
+  # Stale fallback: a resume the model no longer recognizes fails before any
+  # event (empty id capture); retry once fresh in that case only.
+  if (( rc != 0 )) && [[ -n "$prior" ]] && [[ ! -s "$id_capture" ]]; then
     log_event "improve_resume_failed" "rc=$rc resume=$prior; retrying fresh"
     warn "improve: resume of $prior failed (rc=$rc); retrying without resume"
-    : > "$json_path"
-    child_store_begin "$ckey" codex improve "$repo" improve "$out_path"
-    env -u CEREBRO_SESSION_ID -u CEREBRO_SESSION_DIR \
-      "${TIMEOUT_CMD[@]}" "$CEREBRO_CODEX_CMD" "${codex_opts[@]}" "$improve_prompt" < /dev/null 2> "$err_path" \
-      | python3 "$CEREBRO_LIB_DIR/python/codex_capture.py" "$json_path" "$store_file" "$ckey"
-    rc=${PIPESTATUS[0]}
+    : > "$id_capture"
+    child_store_begin "$ckey" opencode improve "$repo" improve "$child_log"
+    backend_opencode_child_run 0 "$repo" "$improve_prompt" "$agent" "" \
+      "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+    rc=$?
   fi
 
-  # On any failure -- non-zero exit OR empty output -- preserve the err log but
-  # do NOT echo a findings path. The orchestrator must not treat a failed run's
-  # stderr as findings.
+  # The findings are the run's closing message; write them to out_path.
+  if (( rc == 0 )) && [[ -s "$out_capture" ]]; then
+    cp "$out_capture" "$out_path"
+  fi
+  rm -f "$id_capture"
+
+  # On any failure -- non-zero exit OR empty findings -- preserve the event log
+  # but do NOT echo a findings path.
   if (( rc != 0 )) || [[ ! -s "$out_path" ]]; then
-    rm -f "$json_path"
-    log_event "improve_failed" "rc=$rc err=$err_path out=$out_path"
-    warn "codex exited rc=$rc"
-    [[ -s "$err_path" ]] && warn "see error log: $err_path"
-    [[ -s "$out_path" ]] && warn "partial output preserved at: $out_path"
-    die "improve: codex run failed; not echoing a findings path"
+    rm -f "$out_capture"
+    log_event "improve_failed" "rc=$rc log=$child_log out=$out_path"
+    warn "improve: review run failed (rc=$rc)"
+    [[ -s "$child_log" ]] && warn "see event log: $child_log"
+    die "improve: review run failed; not echoing a findings path"
   fi
 
   child_store_done "$ckey"
-  rm -f "$json_path"
-  [[ -s "$err_path" ]] || rm -f "$err_path"
+  rm -f "$out_capture"
 
   log_event "improve_written" "$out_path"
   echo "$out_path"
