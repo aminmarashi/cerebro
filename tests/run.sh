@@ -1404,18 +1404,19 @@ EOF
 
   # --- 129. stale fallback: a stored id the provider rejects retries fresh
   # (without --resume) and overwrites the store with the new id. ---
+  # The resume now runs over a transient `opencode serve` (HTTP/SSE), not
+  # `opencode run --session`. The stub's `serve` subcommand refuses to come up
+  # (exits 1, no HTTP server), so serve_ctl's health probe fails, the resume
+  # soft-fails with no captured id, and cerebro's stale-fallback retries fresh.
+  # A fresh `opencode run` emits a new session id and succeeds.
   REJECT_STUB_DIR="$WORKDIR/opencode-reject-stub"
   mkdir -p "$REJECT_STUB_DIR"
   cat > "$REJECT_STUB_DIR/opencode" <<'EOF'
 #!/usr/bin/env bash
-# A resumed run (--session present) is rejected before any event: emit nothing
-# so the id-capture stays empty and cerebro retries fresh. A fresh run emits a
-# new session id and succeeds.
-for a in "$@"; do
-  if [[ "$a" == "--session" ]]; then
-    exit 0
-  fi
-done
+# `serve` is the resume transport; refuse to start so the resume fails fast.
+if [[ "$1" == "serve" ]]; then
+  exit 1
+fi
 sid="FRESH-2222"
 printf '{"type":"step_start","sessionID":"%s","part":{"type":"step-start"}}\n' "$sid"
 printf '{"type":"text","sessionID":"%s","part":{"type":"text","text":"ok"}}\n' "$sid"
@@ -1453,20 +1454,105 @@ EOF
   # failure, and never log execute_resume_failed. The id is persisted at
   # startup (not on success), so the store now holds the LIVE child's id with
   # status=running -- the half-done work stays resumable on continue. ---
+  # The resume runs over a transient `opencode serve`; the stub's `serve`
+  # subcommand starts a tiny HTTP server that answers /global/health, accepts
+  # /session/<id>/prompt_async, and streams an SSE /event sequence: an
+  # assistant step_start + tool_use (the "work") + an error, then session.idle.
+  # pair_pump_opencode.py re-emits those as run-format events so parse_stream
+  # captures WORKED-9999 and exits 4 (error) -- id captured, rc!=0, so the
+  # stale-fallback (which requires an EMPTY id) does NOT fire. A fresh
+  # `opencode run` is never invoked.
   WORK_COUNT="$WORKDIR/realfail-count"
   WORK_STUB_DIR="$WORKDIR/opencode-realfail-stub"
   mkdir -p "$WORK_STUB_DIR"
   cat > "$WORK_STUB_DIR/opencode" <<EOF
 #!/usr/bin/env bash
+# Record one invocation for both the serve (resume) and run (fresh) paths.
 printf 'x' >> "$WORK_COUNT"
+if [[ "\$1" == "serve" ]]; then
+  exec python3 "$WORK_STUB_DIR/serve-stub.py" "\$@"
+fi
 sid="WORKED-9999"
+# Fresh run (only reached if the resume soft-failed): emit a successful turn.
 printf '{"type":"step_start","sessionID":"%s","part":{"type":"step-start"}}\n' "\$sid"
 printf '{"type":"tool_use","sessionID":"%s","part":{"type":"tool","tool":"bash","callID":"c1","state":{"status":"completed","input":{"command":"git commit"},"output":"done"}}}\n' "\$sid"
 printf '{"type":"error","sessionID":"%s","error":{"name":"X","data":{"message":"boom"}}}\n' "\$sid"
 exit 0
 EOF
   chmod +x "$WORK_STUB_DIR/opencode"
+  cat > "$WORK_STUB_DIR/serve-stub.py" <<'PYEOF'
+import http.server, socketserver, json, sys, threading, time
+
+# The pump subscribes to /event first, then POSTs the prompt to
+# /session/<id>/prompt_async. The resumed session id is the <id> in that POST
+# path. The /event stream blocks until the POST arrives (so it can emit parts
+# carrying THAT session id -- pair_pump_opencode.py drops events whose
+# sessionID != the id it is resuming), then streams a step_start + tool_use
+# (the "work") + an error + session.idle, and closes.
+prompted = threading.Event()
+resume_sid = {"v": None}
+
+def events_for(sid):
+    return [
+        {"type": "message.updated",
+         "properties": {"sessionID": sid,
+                        "info": {"id": "msg-assist", "role": "assistant"}}},
+        {"type": "message.part.updated",
+         "properties": {"sessionID": sid,
+                        "part": {"messageID": "msg-assist", "type": "step-start"}}},
+        {"type": "message.part.updated",
+         "properties": {"sessionID": sid,
+                        "part": {"messageID": "msg-assist", "type": "tool",
+                                 "tool": "bash",
+                                 "state": {"status": "completed",
+                                           "input": {"command": "git commit"},
+                                           "output": "done"}}}},
+        {"type": "session.error",
+         "properties": {"sessionID": sid,
+                        "error": {"name": "X", "data": {"message": "boom"}}}},
+        {"type": "session.idle", "properties": {"sessionID": sid}},
+    ]
+
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        if self.path.startswith("/global/health"):
+            self.send_response(200); self.end_headers(); return
+        if self.path == "/event":
+            # Wait for the prompt POST to reveal the resumed session id.
+            prompted.wait(10)
+            sid = resume_sid["v"] or "WORKED-9999"
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            for ev in events_for(sid):
+                self.wfile.write(b"data: " + json.dumps(ev).encode() + b"\n\n")
+                self.wfile.flush()
+                time.sleep(0.02)
+            time.sleep(0.5)
+            return
+        self.send_response(404); self.end_headers()
+    def do_POST(self):
+        # /session/<id>/prompt_async -- capture <id>, ack 200, release /event.
+        parts = self.path.split("/")
+        if len(parts) >= 3 and parts[1] == "session":
+            resume_sid["v"] = parts[2]
+        prompted.set()
+        self.send_response(200); self.end_headers()
+
+port = 0
+for i, a in enumerate(sys.argv[1:]):
+    if a == "--port":
+        port = int(sys.argv[i + 2])
+# Threading: the pump holds the /event SSE stream open while POSTing the prompt
+# to /session/<id>/prompt_async, so the server must handle concurrent conns.
+class TS(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+with TS(("127.0.0.1", port), H) as srv:
+    srv.serve_forever()
+PYEOF
   WORK_STUB_PATH="$WORK_STUB_DIR:$PATH"
+  export WORK_COUNT
 
   WSESS="realfail-session"; WDIR="$CEREBRO_HOME/sessions/$WSESS"
   mkdir -p "$WDIR/children"; : > "$WDIR/transcript.jsonl"
@@ -1483,7 +1569,12 @@ EOF
   invocations="$(wc -c < "$WORK_COUNT" | tr -d ' ')"
   stored_id="$(jq -r --arg k "$WKEY" '.[$k].id' "$WDIR/child-sessions.json" 2>/dev/null)"
   stored_status="$(jq -r --arg k "$WKEY" '.[$k].status' "$WDIR/child-sessions.json" 2>/dev/null)"
-  if [[ $wrc -ne 0 && "$invocations" -eq 1 && "$stored_id" == "WORKED-9999" \
+  # The resume runs over the serve stub, which streams a step_start + tool_use
+  # (work) + an error carrying the RESUMED session id (PRIOR-1234), so
+  # parse_stream captures that id and exits 4 (error). rc!=0 with a non-empty
+  # id means cerebro's stale-fallback (which requires an EMPTY id) does NOT
+  # fire -- the half-done work stays resumable, never re-run fresh.
+  if [[ $wrc -ne 0 && "$invocations" -eq 1 && "$stored_id" == "PRIOR-1234" \
         && "$stored_status" == "running" ]] \
      && ! grep -q '"what":"execute_resume_failed"' "$WDIR/transcript.jsonl"; then
     printf 'PASS  130  resumed execute with prior work does not re-run fresh (stays resumable)\n'; pass=$((pass + 1))
@@ -2431,13 +2522,94 @@ STDERR_CONTAINS="no fresh child session" \
 run_case 153 "answer unknown child session" 1 -- "$CEREBRO_BIN" answer NO-SUCH-CHILD "go"
 
 if (( STUB_OK )); then
+  # Answer-stub: handles BOTH `opencode run` (fresh seed execute) and
+  # `opencode serve` (the resume transport `cerebro answer` now uses). The
+  # fresh `run` emits STUBSESSION-1111 + a "ok" closing text. The `serve`
+  # starts a tiny HTTP server that, on /session/<id>/prompt_async, streams an
+  # SSE /event sequence carrying the RESUMED session id (so the pump keeps the
+  # parts), a step_start + text "ok" + step_finish + session.idle -- parse_stream
+  # then captures the id and "ok" as the closing message, answer surfaces them.
+  ANSWER_STUB_DIR="$WORKDIR/opencode-answer-stub"
+  mkdir -p "$ANSWER_STUB_DIR"
+  cat > "$ANSWER_STUB_DIR/opencode" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == "serve" ]]; then
+  exec python3 "$ANSWER_STUB_DIR/serve-stub.py" "\$@"
+fi
+sid="STUBSESSION-1111"
+printf '{"type":"step_start","sessionID":"%s","part":{"type":"step-start"}}\n' "\$sid"
+printf '{"type":"text","sessionID":"%s","part":{"type":"text","text":"ok"}}\n' "\$sid"
+printf '{"type":"step_finish","sessionID":"%s","part":{"type":"step-finish","reason":"stop"}}\n' "\$sid"
+exit 0
+EOF
+  chmod +x "$ANSWER_STUB_DIR/opencode"
+  cat > "$ANSWER_STUB_DIR/serve-stub.py" <<'PYEOF'
+import http.server, socketserver, json, sys, threading, time
+
+prompted = threading.Event()
+resume_sid = {"v": None}
+
+def events_for(sid):
+    return [
+        {"type": "message.updated",
+         "properties": {"sessionID": sid,
+                        "info": {"id": "msg-assist", "role": "assistant"}}},
+        {"type": "message.part.updated",
+         "properties": {"sessionID": sid,
+                        "part": {"messageID": "msg-assist", "type": "step-start"}}},
+        {"type": "message.part.updated",
+         "properties": {"sessionID": sid,
+                        "part": {"messageID": "msg-assist", "type": "text",
+                                 "text": "ok"}}},
+        {"type": "message.part.updated",
+         "properties": {"sessionID": sid,
+                        "part": {"messageID": "msg-assist", "type": "step-finish"}}},
+        {"type": "session.idle", "properties": {"sessionID": sid}},
+    ]
+
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        if self.path.startswith("/global/health"):
+            self.send_response(200); self.end_headers(); return
+        if self.path == "/event":
+            prompted.wait(10)
+            sid = resume_sid["v"] or "STUBSESSION-1111"
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            for ev in events_for(sid):
+                self.wfile.write(b"data: " + json.dumps(ev).encode() + b"\n\n")
+                self.wfile.flush()
+                time.sleep(0.02)
+            time.sleep(0.5)
+            return
+        self.send_response(404); self.end_headers()
+    def do_POST(self):
+        parts = self.path.split("/")
+        if len(parts) >= 3 and parts[1] == "session":
+            resume_sid["v"] = parts[2]
+        prompted.set()
+        self.send_response(200); self.end_headers()
+
+port = 0
+for i, a in enumerate(sys.argv[1:]):
+    if a == "--port":
+        port = int(sys.argv[i + 2])
+class TS(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+with TS(("127.0.0.1", port), H) as srv:
+    srv.serve_forever()
+PYEOF
+  ANSWER_STUB_PATH="$ANSWER_STUB_DIR:$PATH"
+
   # --- 154. answer resolves the child session id and resumes it ---
   ANSESS="answer-session"; ANDIR="$CEREBRO_HOME/sessions/$ANSESS"
   mkdir -p "$ANDIR/children" "$ANDIR/plans"; : > "$ANDIR/transcript.jsonl"
   # Seed a stored execute session for this repo.
-  env PATH="$ID_STUB_PATH" CEREBRO_SESSION_ID="$ANSESS" \
+  env PATH="$ANSWER_STUB_PATH" CEREBRO_SESSION_ID="$ANSESS" \
     "$CEREBRO_BIN" execute "$REPO" --prompt "do the thing" --branch feat/ans >/dev/null 2>&1
-  ans_out="$(env PATH="$ID_STUB_PATH" CEREBRO_SESSION_ID="$ANSESS" \
+  ans_out="$(env PATH="$ANSWER_STUB_PATH" CEREBRO_SESSION_ID="$ANSESS" \
     "$CEREBRO_BIN" answer STUBSESSION-1111 "use option B" 2>/dev/null)"
   if grep -q '"what":"answer_started"' "$ANDIR/transcript.jsonl" \
      && grep -q 'resume=STUBSESSION-1111' "$ANDIR/transcript.jsonl"; then

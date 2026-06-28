@@ -22,11 +22,18 @@ backend_opencode_child_run_opts() {
 
 # backend_opencode_child_run <pair> <cwd> <prompt> <agent> <resume-id>
 #   <child_log> <msg_capture> <id_capture> <store_file> <ckey> [model] -- run
-# one attempt of an opencode child and return its exit code. Unpaired: launch
-# `opencode run` with the prompt as its positional message, tee the JSON event
-# stream to <child_log>, and pipe it through parse_stream.py. Paired: hand off
-# to backend_opencode_pair_run, which drives the child through a headless
-# `opencode serve` so it can be watched and steered live.
+# one attempt of an opencode child and return its exit code. Unpaired FRESH
+# child: launch `opencode run` with the prompt as its positional message, tee
+# the JSON event stream to <child_log>, and pipe it through parse_stream.py.
+# Unpaired RESUME (non-empty <resume-id>): `opencode run --session <id>` is
+# broken on resume -- in opencode >=1.17 it completes the turn (the model
+# runs, tools fire, "exiting loop" is logged) but writes NO run-json events to
+# stdout and never exits the process, so parse_stream's idle timer fires a
+# false "stalled" on a child that already finished its work. We therefore
+# drive a resume through the same headless `opencode serve` + SSE pump the
+# paired path uses (POST /prompt + /event stream), which streams run-format
+# events and exits cleanly on session.idle. Paired: hand off to
+# backend_opencode_pair_run, which already drives the child through a serve.
 backend_opencode_child_run() {
   local pair="$1" cwd="$2" prompt="$3" agent="$4" resume="$5" \
         child_log="$6" msg_capture="$7" id_capture="$8" store_file="$9" ckey="${10}"
@@ -38,7 +45,13 @@ backend_opencode_child_run() {
     return $?
   fi
 
-  backend_opencode_child_run_opts "$agent" "$resume" "$model"
+  if [[ -n "$resume" ]]; then
+    backend_opencode_resume_run "$cwd" "$prompt" "$agent" "$resume" \
+      "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey" "$model"
+    return $?
+  fi
+
+  backend_opencode_child_run_opts "$agent" "" "$model"
   local err_log="${child_log%.log}.err.log"
   ( cd "$cwd" && env -u CEREBRO_SESSION_ID -u CEREBRO_SESSION_DIR \
       "${TIMEOUT_CMD[@]}" "$CEREBRO_OPENCODE_CMD" "${CHILD_RUN_OPTS[@]}" "$prompt" </dev/null 2>"$err_log" \
@@ -46,6 +59,66 @@ backend_opencode_child_run() {
       | python3 "$CEREBRO_LIB_DIR/python/parse_stream.py" \
           "$msg_capture" "$id_capture" "$store_file" "$ckey" )
   return $?
+}
+
+# backend_opencode_resume_run <cwd> <prompt> <agent> <resume-id> <child_log>
+#   <msg_capture> <id_capture> <store_file> <ckey> [model] -- drive a one-shot
+# unpaired RESUME of an opencode session through a transient headless
+# `opencode serve`. `opencode run --session <id>` does not stream on resume (see
+# backend_opencode_child_run), so we reuse the serve + SSE pump that the paired
+# path proved works for resume: start a private server rooted at <cwd>, feed the
+# prompt to the existing session <resume-id>, stream its run-format events to
+# stdout (teed to <child_log>, piped through parse_stream.py), and exit on the
+# first session.idle. No steering fifo window: the pump's idle grace is set to
+# 0 so it exits the instant the turn completes (a resume is single-turn; any
+# further turn is a separate `cerebro answer`). The pump's own stall markers
+# (`.stalled` / `.restart`) are honored by the same pair_stalled logic the
+# command files already use for the paired path, so a genuinely frozen resume is
+# still detectable.
+backend_opencode_resume_run() {
+  local cwd="$1" prompt="$2" agent="$3" resume="$4" child_log="$5" \
+        msg_capture="$6" id_capture="$7" store_file="$8" ckey="$9" \
+        model="${10:-$CEREBRO_MODEL}"
+  local port serve_pid base_url fifo steer pump_log rc
+  port="$(backend_opencode_pair_free_port)"
+  base_url="http://127.0.0.1:$port"
+  ( cd "$cwd" && exec env -u CEREBRO_SESSION_ID -u CEREBRO_SESSION_DIR \
+      "$CEREBRO_OPENCODE_CMD" serve --port "$port" --hostname 127.0.0.1 ) \
+      >/dev/null 2>&1 &
+  serve_pid=$!
+  if ! python3 "$CEREBRO_LIB_DIR/python/serve_ctl.py" health "$base_url"; then
+    # Soft-fail (do not die): a non-functional opencode serve -- e.g. an
+    # `opencode` stub in tests, or a broken install -- surfaces as a non-zero
+    # resume rc with no captured id, so the command files' stale-fallback path
+    # can retry the child fresh, matching how a rejected `opencode run --session`
+    # used to fail.
+    kill "$serve_pid" 2>/dev/null
+    warn "resume: opencode serve did not come up on port $port"
+    return 2
+  fi
+  fifo="${child_log%.jsonl}.steer.fifo"
+  steer="${child_log%.jsonl}.steering.md"
+  pump_log="${child_log%.jsonl}.pump.log"
+  : > "$steer"
+  rm -f "$fifo"
+  mkfifo "$fifo" || { kill "$serve_pid" 2>/dev/null; warn "resume: cannot create steering pipe at $fifo"; return 2; }
+  # The pump opens the fifo O_RDWR itself, so it never sees EOF even with no
+  # external writer. idle_grace=0: a resume is single-turn, so exit the instant
+  # the turn goes idle (no steering window). The two stall windows stay at their
+  # defaults so a genuinely frozen turn is still flagged via the pump's
+  # `.stalled` marker.
+  printf '%s' "$prompt" \
+    | python3 "$CEREBRO_LIB_DIR/python/pair_pump_opencode.py" \
+        "$base_url" "$resume" "$agent" "$model" \
+        "$fifo" "$steer" "$child_log" 0 \
+        "${CEREBRO_PAIR_STALL:-180}" "${CEREBRO_PAIR_STALL_BUSY:-450}" 2>"$pump_log" \
+    | tee "$child_log" \
+    | python3 "$CEREBRO_LIB_DIR/python/parse_stream.py" \
+        "$msg_capture" "$id_capture" "$store_file" "$ckey"
+  rc=$?
+  kill "$serve_pid" 2>/dev/null
+  rm -f "$fifo"
+  return $rc
 }
 
 # backend_opencode_child_agent_name <role> -- the opencode agent name for a
