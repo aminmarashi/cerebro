@@ -9,9 +9,33 @@ warn() { printf 'cerebro: warning: %s\n' "$*" >&2; }
 die()  { printf 'cerebro: error: %s\n' "$*" >&2; exit 1; }
 dbg()  { [[ "$CEREBRO_DEBUG" == "1" ]] && printf 'cerebro: debug: %s\n' "$*" >&2; return 0; }
 
+# child_fail_stderr <child_log> -- emit a tail of the child's stderr sidecar
+# (next to <child_log>, named <child_log>.err.log) to stderr, when it is
+# non-empty. Used by audit/review/execute/apply-review/doc-write/verify on a
+# non-zero child_run exit so a stalled or errored child is diagnosable
+# (provider auth error, model unavailable, rate limit, stale resume id)
+# instead of silent. Sidecar is written by backend_*_child_run (replaces the
+# old 2>/dev/null that discarded all provider stderr).
+child_fail_stderr() {
+  local child_log="$1"
+  local err_log="${child_log%.log}.err.log"
+  [[ -s "$err_log" ]] || return 0
+  local tail_out
+  tail_out="$(tail -n 15 "$err_log" 2>/dev/null)"
+  [[ -n "$tail_out" ]] || return 0
+  warn "child stderr (tail of $err_log):"
+  printf '%s\n' "$tail_out" | sed 's/^/    /' >&2
+}
+
 # Error helpers for the read-only bridge subcommands (git/gh/read/grep/ls).
 # Exit codes are documented in the orchestrator's system prompt so the model
 # can interpret them programmatically.
+# NOTE: parse_stream.py (the child stream parser) also uses small exit codes
+# for its own outcomes -- 2 = no stream events, 3 = no closing message,
+# 4 = child reported an error event, 5 = child stalled (no stream events for
+# CEREBRO_CHILD_IDLE_TIMEOUT seconds). Those are reported by the calling
+# cerebro command (audit/review/execute/...) in its own failure message, so
+# the two namespaces do not collide at the orchestrator boundary.
 err_usage()  { printf 'cerebro: error: %s\n' "$*" >&2; exit 2; }
 err_path()   { printf 'cerebro: error: %s\n' "$*" >&2; exit 3; }
 err_subcmd() { printf 'cerebro: error: %s\n' "$*" >&2; exit 4; }
@@ -366,6 +390,8 @@ materialise_home() {
     write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-$role.md" \
       "$(child_agent_file "$role")"
   done
+  write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-verify.md" \
+    "$(verify_agent_file)"
   write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-reviewer.md" \
     "$(reviewer_agent_file)"
 

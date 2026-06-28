@@ -9,7 +9,7 @@
 # when a store file + key are given -- persists it the instant it is first seen
 # so an interrupt stays resumable. Exits non-zero if the child produced no
 # events or reported an error.
-import json, os, sys
+import json, os, select, sys
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -145,7 +145,59 @@ def handle_opencode(ev):
         error_msg = data.get("message") or err.get("name") or "unknown error"
 
 
-for line in sys.stdin:
+# Inactivity timeout: if no new complete event line arrives for this many
+# seconds, treat the child as stalled and exit non-zero (dedicated code 5).
+# A slow-but-progressing child (periodic events) is NOT killed -- the timer
+# resets on every received line. 0 disables the timeout (blocking read).
+try:
+    IDLE_TIMEOUT = float(os.environ.get("CEREBRO_CHILD_IDLE_TIMEOUT", "180") or 0)
+except (TypeError, ValueError):
+    IDLE_TIMEOUT = 180.0
+
+
+def _read_bounded():
+    """Yield stdin lines one at a time, with an inactivity deadline.
+
+    Replaces the blocking ``for line in sys.stdin`` loop so a stalled child
+    (one event then silence) becomes a detectable failure instead of an
+    infinite block. Uses select() on stdin; on Unix this is reliable. The
+    deadline resets on every received line, so a slow-but-progressing child
+    is never killed. Yields lines (stripped upstream) until EOF or stall.
+    """
+    if IDLE_TIMEOUT <= 0:
+        # No timeout: fall back to the plain blocking read.
+        for line in sys.stdin:
+            yield line
+        return
+    stdin_fd = sys.stdin.fileno()
+    while True:
+        ready, _, _ = select.select([stdin_fd], [], [], IDLE_TIMEOUT)
+        if not ready:
+            # No data for the full window: stalled.
+            sys.stderr.write(
+                f"\ncerebro: child stalled -- no stream events for "
+                f"{int(IDLE_TIMEOUT)}s\n"
+            )
+            sys.exit(5)
+        chunk = os.read(stdin_fd, 65536)
+        if not chunk:
+            # EOF: stdin closed.
+            return
+        # Buffer and split into lines; os.read may return multiple lines
+        # at once, so we yield each complete line and keep the tail.
+        if not hasattr(_read_bounded, "_buf"):
+            _read_bounded._buf = b""
+        _read_bounded._buf += chunk
+        while b"\n" in _read_bounded._buf:
+            line, _read_bounded._buf = _read_bounded._buf.split(b"\n", 1)
+            yield line.decode("utf-8", "replace")
+    # Flush any trailing partial line without a newline.
+    if getattr(_read_bounded, "_buf", b"") and _read_bounded._buf.strip():
+        yield _read_bounded._buf.decode("utf-8", "replace")
+        _read_bounded._buf = b""
+
+
+for line in _read_bounded():
     line = line.strip()
     if not line:
         continue

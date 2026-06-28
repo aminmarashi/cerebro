@@ -197,16 +197,24 @@ $criteria_block
   if (( rc == 0 )) && [[ -s "$out_capture" ]]; then
     cp "$out_capture" "$out_path"
   fi
+  local _cap_id; _cap_id="$(cat "$id_capture" 2>/dev/null || true)"
   rm -f "$id_capture"
 
   # On any failure -- non-zero exit OR empty findings -- preserve the event log
   # but do NOT echo a findings path. The orchestrator must not feed a failed
-  # review's output into apply-review as if it were findings.
+  # review's output into apply-review as if it were findings. Mark the
+  # child-store entry done ONLY when no session id was captured (a stall /
+  # dead-session failure that cannot be resumed); a failed run that DID
+  # capture an id stays resumable.
   if (( rc != 0 )) || [[ ! -s "$out_path" ]]; then
     rm -f "$out_capture"
+    # Mark done on a stall (rc=5, dead session) or when no id was captured;
+    # a failed run that captured an id stays resumable.
+    [[ -z "$_cap_id" || $rc -eq 5 ]] && child_store_done "$ckey"
     log_event "review_failed" "rc=$rc log=$child_log out=$out_path"
     warn "review: review run failed (rc=$rc)"
     [[ -s "$child_log" ]] && warn "see event log: $child_log"
+    child_fail_stderr "$child_log"
     die "review: review run failed; not echoing a findings path"
   fi
 
@@ -413,8 +421,14 @@ cmd_apply_review() {
   done
 
   if (( rc != 0 )); then
+    local _cap_id; _cap_id="$(cat "$id_capture" 2>/dev/null || true)"
     rm -f "$id_capture" "$msg_capture"
+    # Mark done on a stall (rc=5, dead session) or when no id was captured;
+    # a half-done mutating run that captured an id stays resumable.
+    [[ -z "$_cap_id" || $rc -eq 5 ]] && child_store_done "$ckey"
     log_event "apply_review_failed" "rc=$rc log=$child_log"
+    warn "apply-review: child failed (rc=$rc); see $child_log"
+    child_fail_stderr "$child_log"
     die "apply-review: child failed (rc=$rc); see $child_log"
   fi
   child_store_done "$ckey"

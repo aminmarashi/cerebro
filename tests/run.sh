@@ -977,6 +977,49 @@ fi
 STDERR_CONTAINS="usage: cerebro learn-set" \
 run_case 110 "learn-set blank errors" 1 -- "$CEREBRO_BIN" learn-set ""
 
+# --- 110a. learn-set --stdin records body verbatim (backticks/dollar signs) ---
+LSSESS="lsess"
+LSHOME="$WORKDIR/learn-home"
+mkdir -p "$LSHOME/sessions/$LSSESS"
+env CEREBRO_HOME="$LSHOME" CEREBRO_SESSION_ID="$LSSESS" \
+  "$CEREBRO_BIN" learn-set --stdin >/dev/null 2>&1 <<'STDIN_EOF'
+- Keep diffs small; use `$VAR` literally.
+- Prefer `backticks` and $dollar signs verbatim.
+STDIN_EOF
+LSFILE="$LSHOME/learnings.md"
+if grep -q 'Keep diffs small' "$LSFILE" \
+   && grep -q '`backticks`' "$LSFILE" \
+   && grep -q '\$dollar signs' "$LSFILE"; then
+  printf 'PASS  110a learn-set --stdin records body verbatim\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  110a learn-set --stdin verbatim [file=%s]\n' \
+    "$(cat "$LSFILE" 2>/dev/null)"; fail=$((fail + 1))
+  failures+=("110a learn-set --stdin verbatim")
+fi
+
+# --- 110b. learn-set --stdin plus inline body is ambiguous ---
+lserr="$(env CEREBRO_HOME="$LSHOME" CEREBRO_SESSION_ID="$LSSESS" \
+  "$CEREBRO_BIN" learn-set "inline" --stdin 2>&1 <<'STDIN_EOF'
+stdin body
+STDIN_EOF
+)"
+if [[ "$lserr" == *"mutually exclusive"* ]]; then
+  printf 'PASS  110b learn-set --stdin + inline rejected\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  110b learn-set --stdin + inline not rejected [err=%s]\n' "$lserr"; fail=$((fail + 1))
+  failures+=("110b learn-set --stdin ambiguous")
+fi
+
+# --- 110c. learn-set --stdin with empty body errors ---
+lserr="$(env CEREBRO_HOME="$LSHOME" CEREBRO_SESSION_ID="$LSSESS" \
+  "$CEREBRO_BIN" learn-set --stdin 2>&1 < /dev/null)"
+if [[ "$lserr" == *"usage: cerebro learn-set"* ]]; then
+  printf 'PASS  110c learn-set --stdin empty rejected\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  110c learn-set --stdin empty not rejected [err=%s]\n' "$lserr"; fail=$((fail + 1))
+  failures+=("110c learn-set --stdin empty")
+fi
+
 # --- 111. execute: unknown arg still rejected (stacked-branch flags added) ---
 STDERR_CONTAINS="unknown arg" \
 run_case 111 "execute unknown arg rejected" 1 -- "$CEREBRO_BIN" execute "$REPO" --frob
@@ -995,6 +1038,82 @@ run_case 112 "execute --base/--branch needs plan or prompt" 1 -- \
 STDERR_CONTAINS="--base and --branch must differ" \
 run_case 112b "execute identical base/branch errors" 1 -- \
   "$CEREBRO_BIN" execute "$REPO" --prompt "follow-up" --base feat/step-1 --branch feat/step-1
+
+# --- 112c. verify: missing repo arg rejected ---
+STDERR_CONTAINS="usage: cerebro verify" \
+run_case 112c "verify no repo arg rejected" 1 -- "$CEREBRO_BIN" verify
+
+# --- 112d. verify: relative repo path rejected ---
+STDERR_CONTAINS="must be absolute" \
+run_case 112d "verify relative repo rejected" 1 -- \
+  "$CEREBRO_BIN" verify relative --prompt "x"
+
+# --- 112e. verify: neither --plan nor --prompt rejected ---
+STDERR_CONTAINS="requires --plan <path> or --prompt" \
+run_case 112e "verify needs plan or prompt" 1 -- "$CEREBRO_BIN" verify "$REPO"
+
+# --- 112f. verify: both --plan and --prompt rejected ---
+STDERR_CONTAINS="not both" \
+run_case 112f "verify plan+prompt rejected" 1 -- \
+  "$CEREBRO_BIN" verify "$REPO" --plan "$REPO/README.md" --prompt "x"
+
+# --- 112g. verify: unknown arg rejected ---
+STDERR_CONTAINS="unknown arg" \
+run_case 112g "verify unknown arg rejected" 1 -- \
+  "$CEREBRO_BIN" verify "$REPO" --prompt "x" --bogus
+
+# --- 112h. backend_opencode_child_agent_name verify echoes cerebro-verify ---
+vname="$(bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; shift
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/backend-opencode.sh"
+  backend_opencode_child_agent_name "$1"' _ "$here/../lib" verify 2>/dev/null)"
+if [[ "$vname" == "cerebro-verify" ]]; then
+  printf 'PASS  112h backend_opencode_child_agent_name verify -> cerebro-verify\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  112h agent name wrong [%s]\n' "$vname"; fail=$((fail + 1))
+  failures+=("112h verify agent name :: $vname")
+fi
+
+# --- 112i. backend_opencode_answerable_provider verify echoes opencode:verify ---
+vprov="$(bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; shift
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/backend-opencode.sh"
+  backend_opencode_answerable_provider "$1"' _ "$here/../lib" verify 2>/dev/null)"
+if [[ "$vprov" == "opencode:verify" ]]; then
+  printf 'PASS  112i backend_opencode_answerable_provider verify -> opencode:verify\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  112i answerable provider wrong [%s]\n' "$vprov"; fail=$((fail + 1))
+  failures+=("112i verify provider :: $vprov")
+fi
+
+# --- 112j. verify_agent_file materialises with edit/bash/web allow (NOT the
+# read-only reviewer clamp) and carries the VERIFY contract framing. ---
+vbody="$(bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; shift
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/payloads.sh"
+  . "$CEREBRO_LIB_DIR/session-store.sh"
+  for _f in "$CEREBRO_LIB_DIR"/commands/*.sh; do . "$_f"; done
+  verify_agent_file' _ "$here/../lib" 2>/dev/null)"
+if [[ "$vbody" == *"edit: allow"* ]] \
+   && [[ "$vbody" == *"bash: allow"* ]] \
+   && [[ "$vbody" != *"edit: deny"* ]] \
+   && [[ "$vbody" == *"VERIFY: PASS"* ]] \
+   && [[ "$vbody" == *"HIGH-LEVEL REQUIREMENTS"* ]] \
+   && [[ "$vbody" == *"non-interactive"* ]]; then
+  printf 'PASS  112j verify_agent_file capable perms + VERIFY contract\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  112j verify_agent_file wrong [perms/contract missing]\n'; fail=$((fail + 1))
+  failures+=("112j verify_agent_file :: ${vbody:0:80}")
+fi
 
 # --- 113. review: --criteria-file missing path fails fast (before the reviewer) ---
 STDERR_CONTAINS="cannot read --criteria-file" \
@@ -1124,6 +1243,51 @@ if grep -q "Task B: a different task" "$GDIR/spec.md" \
 else
   printf 'FAIL  124b  replace did not record cleanly\n'; fail=$((fail + 1))
   failures+=("124b replace record")
+fi
+
+# --- 124c. spec set --stdin records body verbatim (backticks/dollar signs) ---
+SSDIR="$WORKDIR/ssess-home"
+mkdir -p "$SSDIR/sessions"
+SSSESS="spec-stdin-sess"
+mkdir -p "$SSDIR/sessions/$SSSESS"
+env CEREBRO_HOME="$SSDIR" CEREBRO_SESSION_ID="$SSSESS" \
+  "$CEREBRO_BIN" spec set --stdin >/dev/null 2>&1 <<'STDIN_EOF'
+# Spec via stdin
+Contains `backticks` and $dollar signs.
+Multi-line body.
+STDIN_EOF
+if grep -q '# Spec via stdin' "$SSDIR/sessions/$SSSESS/spec.md" \
+   && grep -q '`backticks`' "$SSDIR/sessions/$SSSESS/spec.md" \
+   && grep -q '\$dollar signs' "$SSDIR/sessions/$SSSESS/spec.md" \
+   && grep -q 'Multi-line body.' "$SSDIR/sessions/$SSSESS/spec.md"; then
+  printf 'PASS  124c spec set --stdin records body verbatim\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  124c spec set --stdin verbatim [file=%s]\n' \
+    "$(cat "$SSDIR/sessions/$SSSESS/spec.md" 2>/dev/null)"; fail=$((fail + 1))
+  failures+=("124c spec set --stdin verbatim")
+fi
+
+# --- 124d. spec set --stdin plus inline body is ambiguous ---
+serr="$(env CEREBRO_HOME="$SSDIR" CEREBRO_SESSION_ID="$SSSESS" \
+  "$CEREBRO_BIN" spec set "inline" --stdin 2>&1 <<'STDIN_EOF'
+stdin body
+STDIN_EOF
+)"
+if [[ "$serr" == *"mutually exclusive"* ]]; then
+  printf 'PASS  124d spec set --stdin + inline rejected\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  124d spec set --stdin + inline not rejected [err=%s]\n' "$serr"; fail=$((fail + 1))
+  failures+=("124d spec set --stdin ambiguous")
+fi
+
+# --- 124e. spec set --stdin with empty body errors ---
+serr="$(env CEREBRO_HOME="$SSDIR" CEREBRO_SESSION_ID="$SSSESS" \
+  "$CEREBRO_BIN" spec set --stdin 2>&1 < /dev/null)"
+if [[ "$serr" == *"usage: cerebro spec set"* ]]; then
+  printf 'PASS  124e spec set --stdin empty rejected\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  124e spec set --stdin empty not rejected [err=%s]\n' "$serr"; fail=$((fail + 1))
+  failures+=("124e spec set --stdin empty")
 fi
 
 # ========================================================================
@@ -2348,6 +2512,68 @@ else
   failures+=("157 parse_stream closed stderr :: rc=$prsrc")
 fi
 
+# --- 157a. parse_stream exits 5 (child stalled) after the inactivity window
+# with no new events. Uses a small CEREBRO_CHILD_IDLE_TIMEOUT so the test runs
+# fast; emits one event, then holds the pipe open with a sleep so the parser
+# sees EOF only after the stall fires. ---
+PRS2="$WORKDIR/parse-stall-result"
+PIS2="$WORKDIR/parse-stall-id"
+# Pipe one event, then sleep (holding stdin open) so the inactivity timer
+# fires before EOF. Bound the whole thing so a bug that never stalls still
+# terminates.
+( printf '%s\n' '{"type":"step_start","sessionID":"STALL-1","part":{"type":"step-start"}}'
+  sleep 30 ) | env CEREBRO_CHILD_IDLE_TIMEOUT=2 \
+  python3 "$here/../lib/python/parse_stream.py" "$PRS2" "$PIS2" >"$WORKDIR/stall-out" 2>"$WORKDIR/stall-err" &
+STALL_PID=$!
+# Poll up to ~8s for the parser to exit on the stall.
+stall_rc=""
+for _ in 1 2 3 4 5 6 7 8; do
+  sleep 1
+  if ! kill -0 "$STALL_PID" 2>/dev/null; then
+    wait "$STALL_PID"; stall_rc=$?
+    break
+  fi
+done
+if [[ -z "$stall_rc" ]]; then
+  kill "$STALL_PID" 2>/dev/null; wait "$STALL_PID" 2>/dev/null
+  printf 'FAIL  157a parse_stream never stalled\n'; fail=$((fail + 1))
+  failures+=("157a parse_stream stall :: never exited")
+elif [[ "$stall_rc" == "5" ]] \
+   && grep -q 'child stalled' "$WORKDIR/stall-err"; then
+  printf 'PASS  157a parse_stream exits 5 on inactivity stall\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  157a parse_stream stall [rc=%s err=%s]\n' \
+    "$stall_rc" "$(cat "$WORKDIR/stall-err" 2>/dev/null)"; fail=$((fail + 1))
+  failures+=("157a parse_stream stall :: rc=$stall_rc")
+fi
+
+# --- 157b. a non-zero parse_stream exit (stall path) marks the child-store
+# entry done so a re-issue starts fresh. Simulates the command's failure
+# path: begin a child, rc!=0 -> child_store_done, then assert it is no longer
+# "running fresh". ---
+MDHOME="$WORKDIR/markdone-home"
+mkdir -p "$MDHOME/sessions/mkdsess"
+ckey="mkd-test-1"
+ov_fn() {
+  CEREBRO_HOME="$MDHOME" CEREBRO_SESSION_ID="mkdsess" \
+    CEREBRO_LIB_DIR="$here/../lib" bash -c '
+      . "$CEREBRO_LIB_DIR/config.sh"
+      . "$CEREBRO_LIB_DIR/helpers.sh"
+      . "$CEREBRO_LIB_DIR/session-store.sh"
+      "$@"' _ "$@"
+}
+# begin -> done (failure path) -> running_fresh should be false (rc=1).
+ov_fn child_store_begin "$ckey" opencode execute /tmp/repo auto /tmp/x.log >/dev/null 2>&1
+ov_fn child_store_done "$ckey" >/dev/null 2>&1
+ov_fn child_session_running_fresh "$ckey" >/dev/null 2>&1
+fresh_rc=$?
+if [[ "$fresh_rc" -eq 1 ]]; then
+  printf 'PASS  157b child_store_done on failure marks not-running\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  157b child still running after done [rc=%s]\n' "$fresh_rc"; fail=$((fail + 1))
+  failures+=("157b mark done on failure :: rc=$fresh_rc")
+fi
+
 # ========================================================================
 # plan (orchestrator-written) and audit argument validation. `cerebro plan`
 # spawns no child: it records markdown the orchestrator composed, like
@@ -2377,6 +2603,46 @@ if grep -q '# Revised plan' "$plan_out" && ! grep -q 'Do the thing.' "$plan_out"
 else
   printf 'FAIL  160  plan --out did not overwrite [file=%s]\n' "$(cat "$plan_out" 2>/dev/null)"; fail=$((fail + 1))
   failures+=("160 plan overwrite")
+fi
+
+# --- 160a. plan --stdin records body verbatim (backticks/dollar signs literal) ---
+stdin_out="$("$CEREBRO_BIN" plan --out stdin-plan --stdin <<'STDIN_EOF'
+# Plan via stdin
+Body with `backticks` and $dollar signs and "quotes".
+A second line.
+STDIN_EOF
+)"
+if [[ "$stdin_out" == *stdin-plan.md ]] \
+   && grep -q '# Plan via stdin' "$stdin_out" \
+   && grep -q '`backticks`' "$stdin_out" \
+   && grep -q '\$dollar signs' "$stdin_out" \
+   && grep -q 'A second line.' "$stdin_out"; then
+  printf 'PASS  160a plan --stdin records body verbatim\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  160a plan --stdin verbatim [out=%s file=%s]\n' \
+    "$stdin_out" "$(cat "$stdin_out" 2>/dev/null)"; fail=$((fail + 1))
+  failures+=("160a plan --stdin verbatim")
+fi
+
+# --- 160b. plan --stdin plus inline body is ambiguous ---
+err="$("$CEREBRO_BIN" plan "inline body" --stdin <<'STDIN_EOF' 2>&1
+stdin body
+STDIN_EOF
+)"
+if [[ "$err" == *"mutually exclusive"* ]]; then
+  printf 'PASS  160b plan --stdin + inline body rejected\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  160b plan --stdin + inline body not rejected [err=%s]\n' "$err"; fail=$((fail + 1))
+  failures+=("160b plan --stdin ambiguous")
+fi
+
+# --- 160c. plan --stdin with empty body errors ---
+err="$(: | "$CEREBRO_BIN" plan --stdin 2>&1)"
+if [[ "$err" == *"usage: cerebro plan"* ]]; then
+  printf 'PASS  160c plan --stdin empty rejected\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  160c plan --stdin empty not rejected [err=%s]\n' "$err"; fail=$((fail + 1))
+  failures+=("160c plan --stdin empty")
 fi
 
 # --- 161. audit: missing/empty plan file rejected ---

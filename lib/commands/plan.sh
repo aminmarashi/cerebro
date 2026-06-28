@@ -12,16 +12,26 @@
 cmd_plan() {
   require_session
 
-  local content="${1:-}"; shift || true
+  local content=""
+  local use_stdin=0
   local out_name=""
+  local args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --out) shift; out_name="${1:-}"; shift || true ;;
-      *) die "plan: unknown arg: $1" ;;
+      --stdin) use_stdin=1; shift ;;
+      *) args+=("$1"); shift ;;
     esac
   done
+  if (( ${#args[@]} > 0 )); then content="${args[*]}"; fi
+  # --stdin plus an inline positional body is ambiguous.
+  (( use_stdin )) && [[ -n "$content" ]] \
+    && die "plan: --stdin and an inline body are mutually exclusive"
+  if (( use_stdin )); then
+    content="$(cat)" || die "plan: failed to read body from stdin"
+  fi
   [[ -n "${content//[[:space:]]/}" ]] \
-    || die "usage: cerebro plan \"<plan markdown>\" [--out <name>]"
+    || die "usage: cerebro plan \"<plan markdown>\" [--out <name>] [--stdin]"$'\n'"  # --stdin reads the body from stdin (preferred for large plans)"
 
   local plans_dir="$CEREBRO_SESSION_DIR/plans"
   mkdir -p "$plans_dir"
