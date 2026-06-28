@@ -39,11 +39,18 @@ session_backend() {
 # claude's session id under the claude backend), or empty. Reads both the new
 # `foreign_session_id` field and the legacy `opencode_session_id`/`claude_session_id`
 # names so sessions created by an older single-backend release still resume.
+# jq's `//` only falls through on null/false, not on the empty string, but
+# write_metadata_new records `foreign_session_id:""` at launch (before the
+# plugin has the provider id), so we force the fall-through explicitly.
 session_foreign_id() {
   local sess_dir="$1"
   [[ -f "$sess_dir/metadata.json" ]] || return 0
-  jq -r '.foreign_session_id // .opencode_session_id // .claude_session_id // empty' \
-    "$sess_dir/metadata.json" 2>/dev/null
+  jq -r '
+    if (.foreign_session_id // "") != ""
+    then .foreign_session_id
+    else (.opencode_session_id // .claude_session_id // empty)
+    end
+  ' "$sess_dir/metadata.json" 2>/dev/null
 }
 
 # set_session_foreign_id <sess-dir> <id> -- record the provider-assigned id back
