@@ -146,17 +146,6 @@ cmd_review() {
 # Review/audit focus -- do NOT be nitpicky
 Gate strictly on whether the DELIVERABLE does what the spec/plan asks, on REAL contract violations, and on the agent's own build/test results. A finding must reflect input that can plausibly occur in real data/usage. Do NOT raise (these are NOISE, not findings): contrived or low-probability input-string permutations (e.g. exotic multi-country location strings, a stray word matching a token) -- if it won't occur in the real data source, it is not a finding; precedence/ordering micro-cases between heuristic signals on hand-crafted inputs; style nits, naming, defensive code for cases that cannot occur, or speculative hardening; the same area whittled round after round -- once the core capability works and prior real findings are addressed, return VIABLE / MET, do not manufacture a fresh edge case each pass to avoid passing. Prefer FEWER, higher-confidence findings. When unsure whether something is real and important, omit it. Converge; do not ping-pong."
 
-  # Append the user-owned local grader overlay, if any, so a user can tune the
-  # review grader without forking. Added before the optional --criteria-file
-  # section so checkpoint instructions still trail the prompt.
-  local grader_overlay; grader_overlay="$(overlay_body grader)"
-  if [[ -n "$grader_overlay" ]]; then
-    review_prompt+="
-
-# Local grader overlay
-$grader_overlay"
-  fi
-
   # When the orchestrator supplies the plan via --criteria-file, make the
   # reviewer also act as the checkpoint gate: verify the change against EACH
   # acceptance criterion and end with a single machine-readable verdict line the

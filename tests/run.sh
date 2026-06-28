@@ -2914,9 +2914,10 @@ STDERR_CONTAINS="too large" \
 run_case 172 "overlay set over-cap body rejected" 1 -- \
   "$CEREBRO_BIN" overlay set system "$BIG"
 
-  # --- 173. loader wiring: child_agent_file execute carries the overlay, and
-  # stops carrying it once the overlay is removed. Source the lib and call the
-  # function directly (no agent spawn). ---
+  # --- 173. materialise_home writes stable child agents that do NOT contain
+  # user overlays (overlays are read on demand, not appended). Verify the
+  # execute agent is byte-for-byte stable before and after setting/removing an
+  # overlay. ---
   ov_fn() {  # run a lib function in a sourced subshell with the test env
     bash -c '
       set -uo pipefail
@@ -2930,12 +2931,14 @@ run_case 172 "overlay set over-cap body rejected" 1 -- \
     ' _ "$here/../lib" "$@"
   }
 
+  ov_before="$(ov_fn child_agent_file execute 2>/dev/null)"
   "$CEREBRO_BIN" overlay set execute "ZZMARKER" >/dev/null 2>&1
   ov_with="$(ov_fn child_agent_file execute 2>/dev/null)"
   "$CEREBRO_BIN" overlay rm execute >/dev/null 2>&1
   ov_without="$(ov_fn child_agent_file execute 2>/dev/null)"
-  if [[ "$ov_with" == *"ZZMARKER"* && "$ov_without" != *"ZZMARKER"* ]]; then
-    printf 'PASS  173  child_agent_file appends overlay, drops it after rm\n'; pass=$((pass + 1))
+  if [[ "$ov_with" == "$ov_before" && "$ov_without" == "$ov_before" \
+        && "$ov_with" != *"ZZMARKER"* ]]; then
+    printf 'PASS  173  child_agent_file is stable and ignores overlays\n'; pass=$((pass + 1))
   else
     printf 'FAIL  173  overlay loader wiring [with=%s without=%s]\n' \
       "${ov_with: -40}" "${ov_without: -40}"; fail=$((fail + 1))

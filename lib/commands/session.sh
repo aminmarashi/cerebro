@@ -9,10 +9,9 @@ learnings_file()         { printf '%s\n' "$CEREBRO_HOME/learnings.md"; }
 pending_learnings_file() { printf '%s\n' "$CEREBRO_HOME/pending-learnings.md"; }
 
 # User-owned harness overlays (global under $CEREBRO_HOME). Each overlay is a
-# plain-markdown file the loaders APPEND onto a shipped prompt/grader, so a user
-# can tune any prompt surface locally without forking -- the same user-owned
-# pattern as learnings.md. materialise_home() never creates or clobbers them; an
-# absent or whitespace-only overlay changes nothing.
+# plain-markdown file the orchestrator/children can READ when they need local
+# tuning. materialise_home() never creates or clobbers them; an absent or
+# whitespace-only overlay is simply not read.
 overlays_dir() { printf '%s\n' "$CEREBRO_HOME/overlays"; }
 overlay_file() { printf '%s\n' "$(overlays_dir)/$1.md"; }   # $1 = target
 overlay_body() {   # $1=target; echoes body only if present + non-whitespace
@@ -22,49 +21,17 @@ overlay_body() {   # $1=target; echoes body only if present + non-whitespace
   [[ -n "${b//[[:space:]]/}" ]] && printf '%s' "$b"
 }
 
-# Build the orchestrator's full system prompt: the static catalog plus, when
-# present, the user's learned preferences. learnings.md is kept small (capped
-# by cmd_learn_set) so it fits in the system message; a whitespace-only file is
-# treated as empty. Echoed on stdout.
-orchestrator_append_prompt() {
-  local base; base="$(cerebro_system_prompt)"
-  local lf body=""
-  lf="$(learnings_file)"
-  if [[ -s "$lf" ]]; then
-    body="$(cat "$lf")"
-    [[ -n "${body//[[:space:]]/}" ]] || body=""
-  fi
-  if [[ -n "$body" ]]; then
-    base="$(printf '%s\n\n# Learned preferences\n\nDurable preferences cerebro has learned from this user across past sessions. Honor them by default in every plan, execute, review, and apply-review decision unless the user overrides in the moment.\n\n%s' "$base" "$body")"
-  fi
-  local ov; ov="$(overlay_body system)"
-  if [[ -n "$ov" ]]; then
-    printf '%s\n\n# Local harness overlay\n\n%s\n' "$base" "$ov"
-  else
-    printf '%s\n' "$base"
-  fi
-}
-
-# Write the orchestrator agent definition for an opencode launch into the
-# opencode config dir. It carries the composed system prompt (catalog +
-# learnings) as its body and the read-only permission clamp in its frontmatter.
-# Regenerated each launch so learned preferences stay current. Echoes the agent
-# name. opencode only; the claude backend passes the prompt inline instead.
-write_orchestrator_agent() {
-  local body; body="$(orchestrator_append_prompt)"
-  write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-orchestrator.md" \
-    "$(orchestrator_agent_file "$body")"
-  printf 'cerebro-orchestrator\n'
-}
-
-# Resolve the orchestrator identifier for the active backend: under opencode it
-# is the agent name (write_orchestrator_agent); under claude it is the composed
-# system prompt (passed inline via --append-system-prompt). Echoed on stdout.
+# orchestrator_handle -- resolve the stable orchestrator identifier for the
+# active backend: under opencode it is the agent name (materialise_home writes a
+# stable agent file from the static system prompt); under claude it is the
+# static system prompt file path (the backend loads it with --append-system-prompt-file).
+# User-owned local overlays and learnings are no longer injected here; they live
+# in plain files the model can read when needed. Echoed on stdout.
 orchestrator_handle() {
   if backend_is opencode; then
-    write_orchestrator_agent
+    printf 'cerebro-orchestrator\n'
   else
-    orchestrator_append_prompt
+    printf '%s\n' "$CEREBRO_HOME/system-prompt.md"
   fi
 }
 
@@ -94,14 +61,14 @@ cmd_launch() {
   backend_launch_orchestrator "$sess_dir" "$handle"
 }
 
-# Build the observer session's system prompt: the full orchestrator prompt
+# Build the observer session's system prompt: the static orchestrator prompt
 # (so it understands what audit/execute/review children do) plus the
 # observe-mode overlay that narrows it to watching and steering. When a target
 # id is given, point it at that session by default. Echoed on stdout.
 observer_append_prompt() {
   local target="${1:-}"
   local base mode
-  base="$(orchestrator_append_prompt)"
+  base="$(cerebro_system_prompt)"
   mode="$(cerebro_observe_mode_prompt)"
   if [[ -n "$target" ]]; then
     printf '%s\n\n%s\n\nThe user launched this observer to watch session `%s`. Begin by running `cerebro observe %s` and narrating what you see; keep looping until its children are done or the user stops you.\n' \
@@ -111,22 +78,14 @@ observer_append_prompt() {
   fi
 }
 
-# Write the observer agent definition for an opencode launch. Echoes the agent
-# name. opencode only.
-write_observer_agent() {
-  local target="${1:-}" body
-  body="$(observer_append_prompt "$target")"
-  write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-observer.md" \
-    "$(observer_agent_file "$body")"
-  printf 'cerebro-observer\n'
-}
-
-# Resolve the observer identifier for the active backend: opencode agent name
-# or claude inline prompt. Echoed on stdout.
+# observer_handle -- resolve the stable observer identifier for the active
+# backend: under opencode it is the agent name (materialise_home writes a stable
+# agent file from the static observe-mode prompt); under claude it is the
+# composed inline prompt (there is no separate observer file). Echoed on stdout.
 observer_handle() {
-  local target="$1"
+  local target="${1:-}"
   if backend_is opencode; then
-    write_observer_agent "$target"
+    printf 'cerebro-observer\n'
   else
     observer_append_prompt "$target"
   fi

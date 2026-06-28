@@ -90,7 +90,9 @@ child_noninteractive_note() {
 
 # child_sys_prompt <role> -- the full --append-system-prompt for a claude child
 # of the given role: its role base prompt followed by the shared non-interactive
-# note, then any user-owned local overlay. Used by the claude backend.
+# note. User-owned local overlays are no longer appended here; they are written
+# to $CEREBRO_HOME/overlays/<role>.md and the model can read them when needed.
+# Keeping this body stable lets the backend cache the system prompt.
 child_sys_prompt() {
   local role="$1"
   local f="$(cerebro_payloads_dir)/prompts/$role.md"
@@ -98,10 +100,7 @@ child_sys_prompt() {
     execute|apply-review|doc-write|verify) ;;
     *) die "child_sys_prompt: unknown role: $role" ;;
   esac
-  local out; out="$(printf '%s\n\n%s' "$(cat "$f")" "$(child_noninteractive_note)")"
-  local ov; ov="$(overlay_body "$role")"
-  [[ -n "$ov" ]] && out="$(printf '%s\n\n# Local overlay\n%s' "$out" "$ov")"
-  printf '%s' "$out"
+  printf '%s\n\n%s' "$(cat "$f")" "$(child_noninteractive_note)"
 }
 
 # ----- opencode agent generators --------------------------------------------
@@ -118,9 +117,10 @@ child_sys_prompt() {
 
 # child_agent_file <role> -- the full opencode agent markdown for a child of
 # the given role: YAML frontmatter pinning its mode + tool permissions, then its
-# role base prompt followed by the shared non-interactive note. All child roles
-# get full edit/bash/read/search access (they are the only place repo mutation
-# happens).
+# role base prompt followed by the shared non-interactive note. User-owned local
+# overlays are no longer appended here; they are written to
+# $CEREBRO_HOME/overlays/<role>.md and the model can read them when needed.
+# Keeping this body stable lets the backend cache the system prompt.
 child_agent_file() {
   local role="$1"
   local f="$(cerebro_payloads_dir)/prompts/$role.md"
@@ -146,20 +146,16 @@ permission:
 ---
 EOF
 )
-  out="$(printf '%s\n%s\n\n%s' "$out" "$(cat "$f")" "$(child_noninteractive_note)")"
-  local ov; ov="$(overlay_body "$role")"
-  [[ -n "$ov" ]] && out="$(printf '%s\n\n# Local overlay\n%s' "$out" "$ov")"
-  printf '%s' "$out"
+  printf '%s\n%s\n\n%s' "$out" "$(cat "$f")" "$(child_noninteractive_note)"
 }
 
 # verify_agent_file -- the opencode agent markdown for the cerebro verify child.
 # Same capable permission shape as child_agent_file (edit/bash/web/external
 # allow) since it must start servers, rebuild images, and drive a browser; NOT
-# the read-only reviewer clamp. Body = verify.md + noninteractive-note.md +
-# any user-owned local verify overlay. Runs on CEREBRO_REVIEW_MODEL (the
-# reviewer model, which has browser capability) independent of the
-# implementer. Its report is the run's final message; the final line is the
-# VERIFY: PASS|FAIL|BLOCKED contract.
+# the read-only reviewer clamp. Body = verify.md + noninteractive-note.md.
+# User-owned local overlays are no longer appended here; they are written to
+# $CEREBRO_HOME/overlays/verify.md and the model can read them when needed.
+# Keeping this body stable lets the backend cache the system prompt.
 verify_agent_file() {
   local out
   out=$(cat <<'EOF'
@@ -175,12 +171,9 @@ permission:
 ---
 EOF
 )
-  out="$(printf '%s\n%s\n\n%s' "$out" \
+  printf '%s\n%s\n\n%s' "$out" \
     "$(cat "$(cerebro_payloads_dir)/prompts/verify.md")" \
-    "$(child_noninteractive_note)")"
-  local ov; ov="$(overlay_body verify)"
-  [[ -n "$ov" ]] && out="$(printf '%s\n\n# Local overlay\n%s' "$out" "$ov")"
-  printf '%s' "$out"
+    "$(child_noninteractive_note)"
 }
 
 # reviewer_agent_file -- the opencode agent markdown for the read-only reviewer
@@ -227,13 +220,13 @@ EOF
   printf '%s\n' "$(cerebro_reviewer_note)"
 }
 
-# orchestrator_agent_file <body> -- the opencode agent markdown for the
-# interactive orchestrator. Its tools are clamped so it can never touch a repo
-# directly: no edit/write, no Task delegation, and bash denied except
-# `cerebro ...`. Read/grep/glob and web tools stay on. <body> is the composed
-# system prompt (system-prompt.md plus any learned preferences). opencode only.
+# orchestrator_agent_file -- the opencode agent markdown for the interactive
+# orchestrator. Its tools are clamped so it can never touch a repo directly: no
+# edit/write, no Task delegation, and bash denied except `cerebro ...`.
+# Read/grep/glob and web tools stay on. Body is the static system-prompt.md only;
+# user-owned local overlays and learnings are no longer appended here, so this
+# file is byte-for-byte stable across launches and can be prompt-cached.
 orchestrator_agent_file() {
-  local body="$1"
   cat <<'EOF'
 ---
 description: cerebro orchestrator -- drives the plan/execute/review loop via cerebro subcommands
@@ -249,15 +242,14 @@ permission:
     "cerebro *": allow
 ---
 EOF
-  printf '%s\n' "$body"
+  cat "$(cerebro_payloads_dir)/system-prompt.md"
 }
 
-# observer_agent_file <body> -- the opencode agent markdown for a
-# `cerebro --observe` session. Same read-only clamp as the orchestrator, but
-# bash is narrowed to observe/steer/restart + read-only status commands.
-# opencode only.
+# observer_agent_file -- the opencode agent markdown for a `cerebro --observe`
+# session. Same read-only clamp as the orchestrator, but bash is narrowed to
+# observe/steer/restart + read-only status commands. Body is the static
+# observe-mode.md only; no dynamic additions.
 observer_agent_file() {
-  local body="$1"
   cat <<'EOF'
 ---
 description: cerebro observer -- watch and steer another session's live paired children
@@ -287,7 +279,7 @@ permission:
     "cerebro learnings *": allow
 ---
 EOF
-  printf '%s\n' "$body"
+  cat "$(cerebro_payloads_dir)/observe-mode.md"
 }
 
 # ----- default templates ----------------------------------------------------

@@ -21,17 +21,21 @@ backend_claude_child_allowed_tools() {
 }
 
 # backend_claude_child_run_opts <agent> <resume-id> <model> -- build the claude
-# flag array for a child into the caller-scoped CHILD_RUN_OPTS. <agent> here is
-# the role label (execute|apply-review|doc-write); the role prompt is passed
-# separately by the command via --append-system-prompt. We add --resume when a
+# flag array for a child into the caller-scoped CHILD_RUN_OPTS. <agent> here
+# is the role label (execute|apply-review|doc-write); the role prompt is the
+# static shipped prompt, written to a temporary file and loaded via
+# --append-system-prompt-file so the body is cacheable. We add --resume when a
 # prior id is present.
 backend_claude_child_run_opts() {
   local role="$1" resume="${2:-}" model="${3:-}"
   local sys_prompt; sys_prompt="$(child_sys_prompt "$role")"
+  local prompt_file
+  prompt_file="$(mktemp -t cerebro-claude-child-XXXXXX.md)"
+  printf '%s' "$sys_prompt" > "$prompt_file"
   CHILD_RUN_OPTS=(-p --permission-mode bypassPermissions
     --allowedTools "$(backend_claude_child_allowed_tools "$role")"
     --output-format stream-json --verbose
-    --append-system-prompt "$sys_prompt")
+    --append-system-prompt-file "$prompt_file")
   [[ -n "$model" ]] && CHILD_RUN_OPTS+=(--model "$model")
   [[ -n "$resume" ]] && CHILD_RUN_OPTS+=(--resume "$resume")
 }
@@ -102,26 +106,27 @@ backend_claude_materialise_extras() {
   write_if_missing "$CEREBRO_HOME/templates/CLAUDE.md" "$(cerebro_default_claude_md)"
 }
 
-# backend_claude_launch_orchestrator <sess_dir> <prompt> -- exec the interactive
-# claude orchestrator. <prompt> is the composed system prompt (catalog +
-# learnings), passed inline via --append-system-prompt. The tool allow-list is
-# pinned by --allowedTools. The cerebro session id is passed via --session-id
-# so claude's own session matches it; the hook writes the current-session
-# symlink on first prompt so bare `cerebro --resume` finds its way home.
+# backend_claude_launch_orchestrator <sess_dir> <prompt-file> -- exec the
+# interactive claude orchestrator. <prompt-file> is the path to the static
+# system-prompt.md (written by materialise_home), loaded via
+# --append-system-prompt-file so the large static body is byte-for-byte stable
+# and can be prompt-cached. The tool allow-list is pinned by --allowedTools.
+# The cerebro session id is passed via --session-id so claude's own session
+# matches it; the hook writes the current-session symlink on first prompt so
+# bare `cerebro --resume` finds its way home.
 backend_claude_launch_orchestrator() {
-  local sess_dir="$1" prompt="$2"
+  local sess_dir="$1" prompt_file="$2"
   local sid; sid="$(basename "$sess_dir")"
   exec "$CEREBRO_CLAUDE_CMD" \
     --session-id "$sid" \
-    --append-system-prompt "$prompt" \
+    --append-system-prompt-file "$prompt_file" \
     --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__*"
 }
 
 # backend_claude_launch_observer <sess_dir> <prompt> <target> -- exec the
 # interactive claude observer. When <target> is given, seed an interactive
-# first turn so the observer starts narrating immediately. The prompt MUST
-# come before the variadic --allowedTools, which would otherwise swallow it as
-# another tool token.
+# first turn so the observer starts narrating immediately. The observer prompt
+# is short and composed inline; there is no separate observer file.
 backend_claude_launch_observer() {
   local sess_dir="$1" prompt="$2" target="$3"
   local sid; sid="$(basename "$sess_dir")"
@@ -140,24 +145,24 @@ backend_claude_launch_observer() {
   fi
 }
 
-# backend_claude_resume_orchestrator <sess_dir> <foreign-id> <prompt> -- exec
-# the resumed claude orchestrator. claude uses the cerebro session id directly
-# as its own session id (no foreign-id mapping needed), so <foreign-id> is the
-# same id. When empty (shouldn't happen for claude since it always has one),
-# fall back to claude's own --resume picker.
+# backend_claude_resume_orchestrator <sess_dir> <foreign-id> <prompt-file> --
+# exec the resumed claude orchestrator. claude uses the cerebro session id
+# directly as its own session id (no foreign-id mapping needed), so <foreign-id>
+# is the same id. When empty (shouldn't happen for claude since it always has
+# one), fall back to claude's own --resume picker.
 backend_claude_resume_orchestrator() {
-  local sess_dir="$1" id="$2" prompt="$3"
+  local sess_dir="$1" id="$2" prompt_file="$3"
   if [[ -n "$id" ]]; then
     exec "$CEREBRO_CLAUDE_CMD" \
       --resume "$id" \
-      --append-system-prompt "$prompt" \
+      --append-system-prompt-file "$prompt_file" \
       --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__*"
   else
     # Bare resume: claude shows its own picker. The hook writes the
     # current-session symlink as soon as the user submits their first prompt.
     exec "$CEREBRO_CLAUDE_CMD" \
       --resume \
-      --append-system-prompt "$prompt" \
+      --append-system-prompt-file "$prompt_file" \
       --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__*"
   fi
 }
@@ -219,12 +224,17 @@ backend_claude_pair_run() {
   local sys_prompt; sys_prompt="$(child_sys_prompt "$role")"
   local opts=(-p --permission-mode bypassPermissions
     --allowedTools "$(backend_claude_child_allowed_tools "$role")"
-    --output-format stream-json --verbose
-    --append-system-prompt "$sys_prompt")
+    --output-format stream-json --verbose)
   [[ -n "$model" ]] && opts+=(--model "$model")
   local run_opts=("${opts[@]}")
   [[ -n "$resume" ]] && run_opts+=(--resume "$resume")
   run_opts+=("${PAIR_OPTS[@]}")
+  # The role prompt is short/static; write it to a temp file and load via
+  # --append-system-prompt-file so the body is cacheable.
+  local prompt_file
+  prompt_file="$(mktemp -t cerebro-claude-child-XXXXXX.md)"
+  printf '%s' "$sys_prompt" > "$prompt_file"
+  run_opts+=(--append-system-prompt-file "$prompt_file")
   ( cd "$cwd" && printf '%s' "$prompt" \
       | backend_claude_pair_feed 1 "$child_log" \
       | env -u CEREBRO_SESSION_ID -u CEREBRO_SESSION_DIR \

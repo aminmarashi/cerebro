@@ -78,10 +78,10 @@ backend_materialise_extras() {
   "backend_$(current_backend)_materialise_extras"
 }
 
-# backend_launch_orchestrator <sess_dir> <agent-or-prompt> -- exec the
-# interactive orchestrator under the active backend. <agent-or-prompt> is the
-# composed system prompt for claude or the agent name for opencode. Never
-# returns (execs).
+# backend_launch_orchestrator <sess_dir> <agent-or-prompt-file> -- exec the
+# interactive orchestrator under the active backend. <agent-or-prompt-file> is
+# the agent name for opencode or the path to the static system-prompt.md for
+# claude. Never returns (execs).
 backend_launch_orchestrator() {
   "backend_$(current_backend)_launch_orchestrator" "$@"
 }
@@ -93,10 +93,11 @@ backend_launch_observer() {
   "backend_$(current_backend)_launch_observer" "$@"
 }
 
-# backend_resume_orchestrator <sess_dir> <foreign-id> <agent-or-prompt> -- exec
-# the resumed orchestrator. <foreign-id> is the provider conversation id (may
-# be empty, in which case the backend starts a fresh conversation in the same
-# cerebro session dir). Never returns (execs).
+# backend_resume_orchestrator <sess_dir> <foreign-id> <agent-or-prompt-file> --
+# exec the resumed orchestrator. <foreign-id> is the provider conversation id
+# (may be empty, in which case the backend starts a fresh conversation in the
+# same cerebro session dir). For claude, <agent-or-prompt-file> is the path to
+# the static system-prompt.md. Never returns (execs).
 backend_resume_orchestrator() {
   "backend_$(current_backend)_resume_orchestrator" "$@"
 }

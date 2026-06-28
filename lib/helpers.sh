@@ -367,24 +367,34 @@ build_timeout_cmd() {
 # opencode config tree ($CEREBRO_HOME/.opencode: agents + plugin + base config)
 # is ALWAYS written because the read-only reviewer runs under opencode
 # regardless of CEREBRO_BACKEND, and the opencode backend's editing children +
-# orchestrator agent files live there too. The AGENTS.md template is shared
-# (opencode reads AGENTS.md as its project rules file, and the claude backend
-# additionally ships a CLAUDE.md template via its materialise_extras).
-# Idempotent: managed files are overwritten only when their content differs.
-# The orchestrator and observer agents (opencode) are NOT written here -- they
-# carry per-launch learned preferences and are materialised by the launch path.
+# orchestrator agent files live there too. Idempotent: managed files are
+# overwritten only when their content differs.
+#
+# Agent files contain ONLY the static shipped prompts. User-owned learnings
+# and overlays are kept in their own files under $CEREBRO_HOME so the model can
+# read them when needed; they are NOT mixed into the agent body. Keeping the
+# agent files byte-for-byte stable across launches lets the backend cache the
+# system prompt.
 materialise_home() {
   mkdir -p "$CEREBRO_HOME/.opencode/agent" "$CEREBRO_HOME/.opencode/plugin" \
     "$CEREBRO_HOME/sessions" "$CEREBRO_HOME/templates" "$CEREBRO_HOME/overlays" \
     || die "cannot create $CEREBRO_HOME"
 
-  # Shared system prompt (read by both backends' launch paths).
+  # Shared system prompt (read by the claude backend; also the core of the
+  # opencode orchestrator agent).
   write_if_changed "$CEREBRO_HOME/system-prompt.md" "$(cerebro_system_prompt)"
 
   # The opencode config tree is shared: the reviewer agent always runs under
   # opencode, and the opencode editing backend's child agents live here too.
   write_if_changed "$CEREBRO_HOME/.opencode/opencode.json" "$(cerebro_opencode_json)"
   write_if_changed "$CEREBRO_HOME/.opencode/plugin/cerebro.js" "$(cerebro_plugin_js)"
+
+  # Orchestrator + observer agents: static bodies so the backend can cache.
+  write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-orchestrator.md" \
+    "$(orchestrator_agent_file)"
+  write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-observer.md" \
+    "$(observer_agent_file)"
+
   local role
   for role in execute apply-review doc-write; do
     write_if_changed "$CEREBRO_HOME/.opencode/agent/cerebro-$role.md" \

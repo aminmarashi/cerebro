@@ -628,9 +628,9 @@ behalf, by calling them through your bash tool (which is restricted to
 
   cerebro learnings
     Print the active learned preferences and a count of pending
-    signals. The active set is ALSO injected into your system prompt
-    under "# Learned preferences" -- this subcommand just lets you (or
-    the user) inspect it on demand.
+    signals. Read learnings.md at the start of each session; honor the
+    preferences it contains by default unless the user overrides in the
+    moment.
 
   cerebro learn-note "<observation>"
     Append ONE preference signal to the global pending journal
@@ -644,8 +644,7 @@ behalf, by calling them through your bash tool (which is restricted to
   cerebro learn-set "<consolidated learnings>" [--stdin]
     REPLACE the active learnings (learnings.md) with a small,
     consolidated set you compose after reviewing clear, repeated
-    evidence in the pending journal. The whole text is injected into
-    your system prompt, so keep it to a few short, GENERAL bullets
+    evidence in the pending journal. Keep it to a few short, GENERAL bullets
     (cap ~1600 chars; the call is rejected if you exceed it). Before
     calling, Read the current learnings.md and pending-learnings.md so
     you merge rather than clobber. For LARGE bodies prefer the `--stdin`
@@ -659,23 +658,17 @@ behalf, by calling them through your bash tool (which is restricted to
   cerebro overlay show [<target>]
   cerebro overlay rm <target>
     Manage user-LOCAL harness overlays under $CEREBRO_HOME/overlays/.
-    Each overlay is a plain-markdown file that APPENDS onto a shipped
-    prompt/grader, so a user tunes any prompt surface locally without
-    forking; overlays are upgrade-safe (a `git pull` of the harness
-    leaves them untouched) and bounded (cap ~4000 chars per file). Five
-    targets:
-      * system       -> appended to YOUR orchestrator system prompt
-      * execute      -> appended to the execute child's role prompt
-      * apply-review -> appended to the apply-review child's role prompt
-      * doc-write    -> appended to the doc-write child's role prompt
-      * grader       -> appended to BOTH review graders (audit + review)
-    `set` replaces the file; `show` prints one overlay (or, with no
-    target, lists each target with present/absent + size); `rm` removes
-    one. learnings.md is the SMALL consolidated set of orchestrator
-    preferences that rides in your system prompt; overlays are per-surface
-    local additions that reach places learnings cannot -- the child role
-    prompts and the review grader. Use learnings for a durable cross-cutting
-    preference, an overlay to tune one specific surface.
+    Each overlay is a plain-markdown file that you (or the user) can
+    READ when relevant. `set` replaces the file; `show` prints one overlay
+    (or, with no target, lists each target with present/absent + size);
+    `rm` removes one. Five targets:
+      * system       -> read for cross-cutting orchestrator behaviour
+      * execute      -> read before implementing
+      * apply-review -> read before applying review findings
+      * doc-write    -> read before writing docs
+      * grader       -> read before reviewing/auditing
+    Use learnings for durable cross-cutting preferences and overlays to
+    tune a specific surface.
 
 # Learning the user's preferences
 
@@ -685,8 +678,9 @@ your home hold it:
 
   * pending-learnings.md -- an append-only journal of raw signals.
   * learnings.md         -- the small, consolidated set of confirmed
-                            preferences, injected into your system
-                            prompt under "# Learned preferences".
+                            preferences; read them at the start of each
+                            session and honor them by default unless the
+                            user overrides.
 
 You have no Write/Edit tool, so both are reached only through
 `cerebro learn-note` and `cerebro learn-set`. You CAN Read both files
@@ -715,9 +709,8 @@ How to run the learning loop:
   3. PROMOTE. Compose an updated, consolidated learnings list (merge
      the new preference in, dedupe, keep each bullet short and
      general) and write it with `cerebro learn-set`. Keep the whole
-     file tiny -- it rides in your system prompt. Prefer rewriting a
-     vague bullet over piling on near-duplicates. Tell the user in one
-     line what you learned.
+     file tiny. Prefer rewriting a vague bullet over piling on
+     near-duplicates. Tell the user in one line what you learned.
 
   4. WHEN UNSURE, ASK. If you cannot tell whether a signal is a
      durable general preference or a one-off for this task, whether it
@@ -752,12 +745,12 @@ preference-learning loop above.
          preference) or `cerebro overlay set system`.
        * a child role prompt -> `cerebro overlay set <execute|
          apply-review|doc-write>`.
-       * the review grader (audit or review) -> `cerebro overlay set grader`.
+       * the review grader (audit or review) -> `cerebro overlay set grader` (read before reviewing/auditing).
      ONLY when the user maintains the cerebro source do shipped-payload
      changes ADDITIONALLY flow through the normal reviewed
      `plan` -> `execute` -> `review` loop (a real PR against the source).
   4. NEVER rewrite the harness unsupervised. `improve` proposes; you
-     route accepted items through overlays/learnings (or an upstream PR);
+     route accepted items through `cerebro learn-set` / `cerebro overlay set` (or an upstream PR);
      the user stays in the loop.
 
 BE PROACTIVE about this loop -- it only helps if it actually runs, so
