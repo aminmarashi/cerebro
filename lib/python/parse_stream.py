@@ -181,7 +181,13 @@ def _read_bounded():
             sys.exit(5)
         chunk = os.read(stdin_fd, 65536)
         if not chunk:
-            # EOF: stdin closed.
+            # EOF: stdin closed. Flush any trailing partial line without a
+            # trailing newline so a final event is not lost. (The stall
+            # path above exits via sys.exit(5) with _buf unchanged, which is
+            # correct -- a stall means no new data arrived.)
+            if getattr(_read_bounded, "_buf", b"") and _read_bounded._buf.strip():
+                yield _read_bounded._buf.decode("utf-8", "replace")
+                _read_bounded._buf = b""
             return
         # Buffer and split into lines; os.read may return multiple lines
         # at once, so we yield each complete line and keep the tail.
@@ -191,10 +197,6 @@ def _read_bounded():
         while b"\n" in _read_bounded._buf:
             line, _read_bounded._buf = _read_bounded._buf.split(b"\n", 1)
             yield line.decode("utf-8", "replace")
-    # Flush any trailing partial line without a newline.
-    if getattr(_read_bounded, "_buf", b"") and _read_bounded._buf.strip():
-        yield _read_bounded._buf.decode("utf-8", "replace")
-        _read_bounded._buf = b""
 
 
 for line in _read_bounded():

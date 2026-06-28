@@ -70,7 +70,7 @@ backend_claude_child_run() {
 # passed via --append-system-prompt, not via an agent file.
 backend_claude_child_agent_name() {
   case "$1" in
-    execute|apply-review|doc-write|review|audit|verify) printf '%s\n' "$1" ;;
+    execute|apply-review|doc-write|review|audit) printf '%s\n' "$1" ;;
     *) die "backend_claude_child_agent_name: unknown role: $1" ;;
   esac
 }
@@ -83,7 +83,7 @@ backend_claude_child_provider() { printf 'claude\n'; }
 # `cerebro answer` accepts for a claude child.
 backend_claude_answerable_provider() {
   case "$1" in
-    execute|apply-review|doc-write|verify) printf 'claude:%s\n' "$1" ;;
+    execute|apply-review|doc-write) printf 'claude:%s\n' "$1" ;;
     *) die "backend_claude_answerable_provider: unknown role: $1" ;;
   esac
 }

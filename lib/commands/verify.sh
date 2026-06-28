@@ -42,6 +42,7 @@ cmd_verify() {
   if [[ -n "$plan_path" ]]; then
     [[ -r "$plan_path" && -s "$plan_path" ]] \
       || die "verify: cannot read plan (or it is empty): $plan_path"
+    [[ "$plan_path" = /* ]] || die "verify: plan path must be absolute: $plan_path"
     plan_block="$(cat "$plan_path")"
   fi
 
