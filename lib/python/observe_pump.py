@@ -15,6 +15,11 @@
 # and things go quiet for <quiet> seconds; STATUS is "active" while any
 # child is live (call again) or "done" when none are. Read-only: it never
 # writes to a child, so observing never disturbs the agents.
+#
+# A child's log format is auto-detected per line: claude stream-json
+# (`assistant`/`result` with `message.content`) or opencode run-json
+# (`text`/`tool_use`/`step_finish`/`error` with `part`). Both backends'
+# children are observable from one observer.
 
 import glob, json, os, sys, time
 
@@ -146,21 +151,7 @@ def preview(s, n):
     s = " ".join((s or "").split())
     return s[:n] + ("..." if len(s) > n else "")
 
-def render(ev, out):
-    # The orchestrator session's own transcript.jsonl speaks a different
-    # dialect than a child's stream-json log: {kind:"user"} for prompts it
-    # received and {kind:"event"} for the cerebro actions it took.
-    kind = ev.get("kind")
-    if kind == "user":
-        txt = (ev.get("text") or "").strip()
-        if txt:
-            out.append("user: " + preview(txt, 2000))
-        return
-    if kind == "event":
-        what = ev.get("what") or "?"
-        detail = (ev.get("detail") or "").strip()
-        out.append(("%s: %s" % (what, preview(detail, 300))) if detail else what)
-        return
+def render_claude(ev, out):
     t = ev.get("type")
     if t == "assistant":
         for item in ev.get("message", {}).get("content", []) or []:
@@ -170,16 +161,9 @@ def render(ev, out):
                     out.append("says: " + preview(txt, 2000))
             elif item.get("type") == "tool_use":
                 name = item.get("name", "?")
-                # Read-only navigation (reads, searches, listings) is the bulk
-                # of the churn and carries little signal on its own. Drop it so
-                # the batch is dominated by what matters: the agent's reasoning,
-                # the code it writes, and the commands it runs.
                 if name in ("Read", "Grep", "Glob", "LS", "NotebookRead"):
                     continue
                 inp = item.get("input", {}) or {}
-                # TodoWrite is the agent's own plan -- the closest thing to an
-                # explicit architecture/roadmap it emits. Render the list so the
-                # observer can narrate where the work is headed, not just "TodoWrite".
                 if name == "TodoWrite" and isinstance(inp.get("todos"), list):
                     items = []
                     for td in inp["todos"]:
@@ -198,9 +182,6 @@ def render(ev, out):
                 body = inp.get("new_string")
                 if body is None:
                     body = inp.get("content")
-                # Carry enough of the body that a full function/type/signature
-                # survives: the observer can only quote the design it actually
-                # sees, and 600 chars truncates most real definitions.
                 if isinstance(body, str) and body.strip():
                     out.append(("%s %s :: %s" % (name, tgt, preview(body, 1600))).strip())
                 else:
@@ -208,6 +189,77 @@ def render(ev, out):
     elif t == "result":
         sub = ev.get("subtype")
         out.append("(turn complete)" if not sub or sub == "success" else "(ended: %s)" % sub)
+
+def render_opencode(ev, out):
+    t = ev.get("type")
+    part = ev.get("part") or {}
+    if t == "text":
+        txt = (part.get("text") or "").strip()
+        if txt:
+            out.append("says: " + preview(txt, 2000))
+    elif t == "tool_use":
+        name = part.get("tool", "?")
+        if name in ("read", "grep", "glob", "list"):
+            return
+        state = part.get("state") or {}
+        inp = state.get("input") or {}
+        if name == "todowrite" and isinstance(inp.get("todos"), list):
+            items = []
+            for td in inp["todos"]:
+                mark = {"completed": "x", "in_progress": ">"}.get(td.get("status"), " ")
+                items.append("[%s] %s" % (mark, td.get("content") or ""))
+            if items:
+                out.append("plan: " + preview(" | ".join(items), 1200))
+            return
+        tgt = (state.get("title") or inp.get("description") or
+               inp.get("filePath") or inp.get("file_path") or
+               inp.get("pattern") or inp.get("path") or
+               inp.get("query") or inp.get("command") or inp.get("url") or "")
+        if isinstance(tgt, list):
+            tgt = " ".join(map(str, tgt))
+        tgt = preview(str(tgt), 200)
+        body = inp.get("newString")
+        if body is None:
+            body = inp.get("new_string")
+        if body is None:
+            body = inp.get("content")
+        if isinstance(body, str) and body.strip():
+            out.append(("%s %s :: %s" % (name, tgt, preview(body, 1600))).strip())
+        else:
+            out.append(("%s %s" % (name, tgt)).strip())
+    elif t == "step_finish":
+        reason = part.get("reason")
+        if reason in (None, "stop", "tool-calls"):
+            out.append("(turn complete)")
+        else:
+            out.append("(ended: %s)" % reason)
+    elif t == "error":
+        err = ev.get("error") or {}
+        data = err.get("data") or {}
+        out.append("(error: %s)" % preview(data.get("message") or err.get("name") or "error", 200))
+
+def render(ev, out):
+    # The orchestrator session's own transcript.jsonl speaks a different
+    # dialect than a child's log: {kind:"user"} for prompts it received and
+    # {kind:"event"} for the cerebro actions it took.
+    kind = ev.get("kind")
+    if kind == "user":
+        txt = (ev.get("text") or "").strip()
+        if txt:
+            out.append("user: " + preview(txt, 2000))
+        return
+    if kind == "event":
+        what = ev.get("what") or "?"
+        detail = (ev.get("detail") or "").strip()
+        out.append(("%s: %s" % (what, preview(detail, 300))) if detail else what)
+        return
+    # A child's log is either claude stream-json or opencode run-json. Detect
+    # by the event shape: opencode events carry `sessionID` + `part`; claude
+    # events carry `message.content`.
+    if "sessionID" in ev or ev.get("type") in ("step_start", "step_finish"):
+        render_opencode(ev, out)
+    else:
+        render_claude(ev, out)
 
 def drain(log):
     out = []

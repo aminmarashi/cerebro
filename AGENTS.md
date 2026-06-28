@@ -34,16 +34,20 @@ the entry point.
 bin/cerebro            # entry point: locate lib, source modules, dispatch
 lib/config.sh          # shell options + CEREBRO_* env defaults (sourced first)
 lib/helpers.sh         # say/warn/die, exit-code helpers, path + repo resolution, usage
-lib/payloads.sh        # thin loaders for the payload files under lib/payloads/
-lib/payloads/          # hook script, settings.json template, system prompt,
-                       #   child role prompts, default AGENTS.md / CLAUDE.md
-lib/session-store.sh   # session metadata + child-agent session store
-lib/python/            # python helpers (child-session store, stream parsing,
-                       #   pair/observe/steer pumps, path resolution)
-lib/pair.sh            # pair-programming mode (watch + steer a live child)
+lib/payloads.sh        # loaders + generators for the payloads under lib/payloads/
+lib/payloads/          # opencode agent generators, session-binding plugin, opencode.json,
+                       #   hook script + settings.json (claude backend), system prompt,
+                       #   child role prompts, default AGENTS.md / CLAUDE.md templates
+lib/session-store.sh   # session metadata (incl. backend) + child-agent session store
+lib/backend.sh         # the backend dispatch seam (child_run/launch/resume/materialise)
+lib/backend-opencode.sh # opencode backend: `opencode run --agent` / `opencode serve` (pair)
+lib/backend-claude.sh  # claude backend: `claude -p` / `claude --resume` (pair via stream-json)
+lib/python/            # python helpers (child-session store, stream parsing, pair pumps
+                       #   for both backends, observe pump, serve control, path resolution)
+lib/pair.sh            # pair-programming mode shared helpers (watch + steer a live child)
 lib/commands/*.sh      # one file per subcommand group (plan, execute, review, ...)
 lib/main.sh            # dispatch table mapping argv[0] to a cmd_* function
-tests/run.sh           # plain-bash test suite for the read-only bridges
+tests/run.sh           # plain-bash test suite for the read-only bridges + child paths
 ```
 
 Keep modules cohesive: a new subcommand goes in `lib/commands/`, gets a
