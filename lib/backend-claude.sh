@@ -9,6 +9,25 @@
 # mode drives the child through claude's stream-json stdin.
 # Sourced by bin/cerebro via backend.sh; not meant to be executed directly.
 
+# backend_claude_endpoint_env -- when CEREBRO_CLAUDE_BASE_URL is set, export the
+# Anthropic gateway env vars into this process so every spawned `claude`
+# (orchestrator, observer, children) talks to the custom endpoint instead of
+# the claude.ai subscription. Unsets ANTHROPIC_API_KEY so a logged-in subscription
+# can't override the token, and pins ANTHROPIC_MODEL/ANTHROPIC_DEFAULT_HAIKU_MODEL
+# to CEREBRO_MODEL so the orchestrator (which has no --model flag of its own)
+# also hits the configured endpoint. Idempotent; a no-op when
+# CEREBRO_CLAUDE_BASE_URL is unset (the default subscription path, unchanged).
+backend_claude_endpoint_env() {
+  [[ -n "$CEREBRO_CLAUDE_BASE_URL" ]] || return 0
+  [[ "$CEREBRO_MODEL" != "$CEREBRO_DEFAULT_MODEL" ]] \
+    || die "CEREBRO_CLAUDE_BASE_URL is set but CEREBRO_MODEL is still the shipped default ($CEREBRO_DEFAULT_MODEL); set CEREBRO_MODEL to a model the endpoint serves"
+  export ANTHROPIC_BASE_URL="$CEREBRO_CLAUDE_BASE_URL"
+  export ANTHROPIC_AUTH_TOKEN="${CEREBRO_CLAUDE_AUTH_TOKEN:-ollama}"
+  export ANTHROPIC_MODEL="$CEREBRO_MODEL"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="$CEREBRO_MODEL"
+  unset ANTHROPIC_API_KEY
+}
+
 # The --allowedTools list for a claude child of the given role (all mutating;
 # the read-only reviewer runs under opencode regardless of backend, so it never
 # reaches this path).
@@ -51,6 +70,8 @@ backend_claude_child_run() {
   local pair="$1" cwd="$2" prompt="$3" role="$4" resume="$5" \
         child_log="$6" msg_capture="$7" id_capture="$8" store_file="$9" ckey="${10}"
   local model="${11:-$CEREBRO_MODEL}"
+
+  backend_claude_endpoint_env
 
   if (( pair )); then
     backend_claude_pair_run "$cwd" "$prompt" "$role" "$resume" \
@@ -116,6 +137,7 @@ backend_claude_materialise_extras() {
 # bare `cerebro --resume` finds its way home.
 backend_claude_launch_orchestrator() {
   local sess_dir="$1" prompt_file="$2"
+  backend_claude_endpoint_env
   local sid; sid="$(basename "$sess_dir")"
   exec "$CEREBRO_CLAUDE_CMD" \
     --session-id "$sid" \
@@ -129,6 +151,7 @@ backend_claude_launch_orchestrator() {
 # is short and composed inline; there is no separate observer file.
 backend_claude_launch_observer() {
   local sess_dir="$1" prompt="$2" target="$3"
+  backend_claude_endpoint_env
   local sid; sid="$(basename "$sess_dir")"
   local allowed="Bash(cerebro observe:*) Bash(cerebro steer:*) Bash(cerebro restart:*) Bash(cerebro status:*) Bash(cerebro list:*) Bash(cerebro recall:*) Bash(cerebro spec:*) Bash(cerebro learnings:*) Read Grep Glob WebSearch WebFetch mcp__playwright__*"
   if [[ -n "$target" ]]; then
@@ -152,6 +175,7 @@ backend_claude_launch_observer() {
 # one), fall back to claude's own --resume picker.
 backend_claude_resume_orchestrator() {
   local sess_dir="$1" id="$2" prompt_file="$3"
+  backend_claude_endpoint_env
   if [[ -n "$id" ]]; then
     exec "$CEREBRO_CLAUDE_CMD" \
       --resume "$id" \

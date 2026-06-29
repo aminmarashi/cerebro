@@ -36,6 +36,15 @@
 #                         unlimited = no cap (default: 0, no cap)
 #   CEREBRO_OPENCODE_CMD  opencode executable (default: opencode)
 #   CEREBRO_CLAUDE_CMD    claude executable (default: claude) [claude backend]
+#   CEREBRO_CLAUDE_BASE_URL
+#                         optional Anthropic-compatible endpoint for the claude
+#                         backend (e.g. a local Ollama /v1/messages server, or
+#                         any proxy). empty (default) = the claude.ai
+#                         subscription `claude` is logged into [claude backend]
+#   CEREBRO_CLAUDE_AUTH_TOKEN
+#                         bearer token for CEREBRO_CLAUDE_BASE_URL (default:
+#                         ollama, a placeholder local no-auth servers ignore;
+#                         set to the real key for an authed gateway) [claude backend]
 #   CEREBRO_CHILD_SESSION_TTL
 #                         seconds a stored child session id stays resumable
 #                         before it is treated as stale (default: 86400, 24h)

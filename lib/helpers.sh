@@ -211,7 +211,11 @@ Notes:
     + editing children: `opencode` (default) or `claude`. The reviewer
     always runs under opencode. The chosen backend is recorded in each
     session's metadata, so resuming a session always reuses the backend
-    it started with.
+    it started with. Under `claude`, CEREBRO_CLAUDE_BASE_URL optionally
+    points every spawned `claude` at a custom Anthropic-compatible endpoint
+    (a local Ollama `/v1/messages` server, or any proxy/gateway) instead of
+    the claude.ai subscription; empty (the default) keeps the subscription.
+    CEREBRO_MODEL then names a model the endpoint serves.
 
 Requirements: opencode, jq, python3 on PATH. When CEREBRO_BACKEND=claude,
 claude is additionally required. Child runs additionally need git and gh
@@ -219,6 +223,7 @@ on PATH for execute / apply-review / doc-write.
 
 Env: CEREBRO_HOME, CEREBRO_BACKEND, CEREBRO_MODEL, CEREBRO_REVIEW_MODEL,
 CEREBRO_TIMEOUT, CEREBRO_OPENCODE_CMD, CEREBRO_CLAUDE_CMD,
+CEREBRO_CLAUDE_BASE_URL, CEREBRO_CLAUDE_AUTH_TOKEN,
 CEREBRO_CHILD_SESSION_TTL, CEREBRO_PAIR_IDLE, CEREBRO_PAIR_STALL,
 CEREBRO_PAIR_STALL_BUSY, CEREBRO_PAIR_STALL_RETRIES,
 CEREBRO_PAIR_STALL_BACKOFF, CEREBRO_DEBUG.

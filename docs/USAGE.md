@@ -251,6 +251,8 @@ Env vars (all optional):
 | `CEREBRO_HOME` | base dir for all state | `~/.cerebro` |
 | `CEREBRO_MODEL` | model alias for child `claude -p` | provider default |
 | `CEREBRO_REVIEW_MODEL` | model alias for `codex exec` | provider default |
+| `CEREBRO_CLAUDE_BASE_URL` | optional Anthropic-compatible endpoint for the claude backend (e.g. a local Ollama `/v1/messages` server, or any proxy). empty = the claude.ai subscription `claude` is logged into. when set, `CEREBRO_MODEL` must name a model the endpoint serves | empty (subscription) |
+| `CEREBRO_CLAUDE_AUTH_TOKEN` | bearer token for `CEREBRO_CLAUDE_BASE_URL` (local no-auth servers ignore it; set the real key for an authed gateway) | `ollama` |
 | `CEREBRO_TIMEOUT` | wall-clock cap (s) per child call | `0` (no cap, so e2e runs and CI waits are never killed) |
 | `CEREBRO_CHILD_SESSION_TTL` | how long (s) a stored child id stays resumable | `86400` (24h) |
 | `CEREBRO_PAIR_IDLE` | steering window (s) after each paired turn | `60` |
@@ -265,6 +267,30 @@ Two deliberate limits to know about:
 * **No concurrency control.** cerebro won't stop you from running two
   mutating operations against the same repo at once, within or across
   sessions — sequence your own mutating work.
+
+### Using a local model (Ollama, any Anthropic-compatible gateway)
+
+The `claude` backend normally uses the claude.ai subscription `claude`
+is logged into. Point it at a local model server instead by setting
+`CEREBRO_CLAUDE_BASE_URL` and a model the server serves — cerebro
+exports the endpoint into every spawned `claude` (orchestrator and
+children), unsets `ANTHROPIC_API_KEY` so a logged-in subscription can't
+hijack the run, and pins the background "haiku" model to the same name so
+housekeeping calls also stay local:
+
+```bash
+ollama serve                       # local server on :11434
+CEREBRO_BACKEND=claude \
+CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 \
+CEREBRO_MODEL=qwen2.5-coder:14b \
+cerebro
+```
+
+Leave `CEREBRO_CLAUDE_BASE_URL` unset to keep using the subscription.
+For an authenticated gateway, set `CEREBRO_CLAUDE_AUTH_TOKEN` to the
+real key (the default is a placeholder local no-auth servers ignore).
+Small local models (7B-14B) frequently botch tool-call JSON and will
+struggle with cerebro's agentic loop; pick the largest model you can run.
 
 ## Session state
 
