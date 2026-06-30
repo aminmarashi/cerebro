@@ -96,12 +96,13 @@ cmd_verify() {
 
   # Run the verify child agent on the reviewer model (which has browser
   # capability). It is NOT the read-only reviewer clamp -- verify may start
-  # servers, rebuild images, and drive a browser.
-  local agent; agent="$(backend_opencode_child_agent_name verify)"
+  # servers, rebuild images, and drive a browser. Runs under
+  # CEREBRO_REVIEW_BACKEND (opencode by default).
+  local agent; agent="$(review_child_agent_name verify)"
   local rc id_capture out_capture; id_capture="$(mktemp)"; out_capture="$(mktemp)"
 
-  child_store_begin "$ckey" opencode verify "$repo" "${verify_branch:-auto}" "$child_log" "${prior:+preserve-id}"
-  backend_opencode_child_run 0 "$repo" "$verify_prompt" "$agent" "$prior" \
+  child_store_begin "$ckey" "$(review_backend)" verify "$repo" "${verify_branch:-auto}" "$child_log" "${prior:+preserve-id}"
+  review_child_run 0 "$repo" "$verify_prompt" "$agent" "$prior" \
     "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
   rc=$?
 
@@ -111,8 +112,8 @@ cmd_verify() {
     log_event "verify_resume_failed" "rc=$rc resume=$prior; retrying fresh"
     warn "verify: resume of $prior failed (rc=$rc); retrying without resume"
     : > "$id_capture"
-    child_store_begin "$ckey" opencode verify "$repo" "${verify_branch:-auto}" "$child_log"
-    backend_opencode_child_run 0 "$repo" "$verify_prompt" "$agent" "" \
+    child_store_begin "$ckey" "$(review_backend)" verify "$repo" "${verify_branch:-auto}" "$child_log"
+    review_child_run 0 "$repo" "$verify_prompt" "$agent" "" \
       "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
     rc=$?
   fi

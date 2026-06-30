@@ -92,15 +92,24 @@ child_noninteractive_note() {
 # of the given role: its role base prompt followed by the shared non-interactive
 # note. User-owned local overlays are no longer appended here; they are written
 # to $CEREBRO_HOME/overlays/<role>.md and the model can read them when needed.
-# Keeping this body stable lets the backend cache the system prompt.
+# Keeping this body stable lets the backend cache the system prompt. The
+# read-only reviewer roles (review / audit / improve, reached only when
+# CEREBRO_REVIEW_BACKEND=claude) carry the shared reviewer note -- exactly the
+# body the opencode reviewer_agent_file carries -- so the read-only constraints
+# are present as system-level guidance (the review task prompt is composed
+# inline and otherwise has none); audit/improve already embed the note in their
+# task prompt, so this duplicates it the same way the opencode reviewer agent
+# already does.
 child_sys_prompt() {
   local role="$1"
-  local f="$(cerebro_payloads_dir)/prompts/$role.md"
   case "$role" in
-    execute|apply-review|doc-write|verify) ;;
+    execute|apply-review|doc-write|verify)
+      local f="$(cerebro_payloads_dir)/prompts/$role.md"
+      printf '%s\n\n%s' "$(cat "$f")" "$(child_noninteractive_note)" ;;
+    review|audit|improve)
+      printf '%s\n' "$(cerebro_reviewer_note)" ;;
     *) die "child_sys_prompt: unknown role: $role" ;;
   esac
-  printf '%s\n\n%s' "$(cat "$f")" "$(child_noninteractive_note)"
 }
 
 # ----- opencode agent generators --------------------------------------------

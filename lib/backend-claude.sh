@@ -9,32 +9,46 @@
 # mode drives the child through claude's stream-json stdin.
 # Sourced by bin/cerebro via backend.sh; not meant to be executed directly.
 
-# backend_claude_endpoint_env -- when CEREBRO_CLAUDE_BASE_URL is set, export the
-# Anthropic gateway env vars into this process so every spawned `claude`
-# (orchestrator, observer, children) talks to the custom endpoint instead of
-# the claude.ai subscription. Unsets ANTHROPIC_API_KEY so a logged-in subscription
-# can't override the token, and pins ANTHROPIC_MODEL/ANTHROPIC_DEFAULT_HAIKU_MODEL
-# to CEREBRO_MODEL so the orchestrator (which has no --model flag of its own)
-# also hits the configured endpoint. Idempotent; a no-op when
-# CEREBRO_CLAUDE_BASE_URL is unset (the default subscription path, unchanged).
+# backend_claude_endpoint_env [model] -- when CEREBRO_CLAUDE_BASE_URL is set,
+# export the Anthropic gateway env vars into this process so every spawned
+# `claude` (orchestrator, observer, children) talks to the custom endpoint
+# instead of the claude.ai subscription. Unsets ANTHROPIC_API_KEY so a logged-in
+# subscription can't override the token, and pins
+# ANTHROPIC_MODEL/ANTHROPIC_DEFAULT_HAIKU_MODEL to the effective model so the
+# orchestrator (which has no --model flag of its own) also hits the configured
+# endpoint. <model> (defaults to CEREBRO_MODEL) is the model THIS run will use:
+# editing children and the orchestrator pass CEREBRO_MODEL; a reviewer child
+# (CEREBRO_REVIEW_BACKEND=claude) passes CEREBRO_REVIEW_MODEL so the gateway
+# serves the review model, not the editing model. It must differ from the
+# shipped editing default (CEREBRO_DEFAULT_MODEL) so a misconfigured run fails
+# early instead of at the provider. Idempotent; a no-op when
+# CEREBRO_CLAUDE_BASE_URL is unset (the default subscription path, unchanged --
+# the --model flag alone selects the model).
 backend_claude_endpoint_env() {
   [[ -n "$CEREBRO_CLAUDE_BASE_URL" ]] || return 0
-  [[ "$CEREBRO_MODEL" != "$CEREBRO_DEFAULT_MODEL" ]] \
-    || die "CEREBRO_CLAUDE_BASE_URL is set but CEREBRO_MODEL is still the shipped default ($CEREBRO_DEFAULT_MODEL); set CEREBRO_MODEL to a model the endpoint serves"
+  local model="${1:-$CEREBRO_MODEL}"
+  [[ "$model" != "$CEREBRO_DEFAULT_MODEL" ]] \
+    || die "CEREBRO_CLAUDE_BASE_URL is set but the effective model is still the shipped default ($CEREBRO_DEFAULT_MODEL); set the relevant CEREBRO_*MODEL to a model the endpoint serves"
   export ANTHROPIC_BASE_URL="$CEREBRO_CLAUDE_BASE_URL"
   export ANTHROPIC_AUTH_TOKEN="${CEREBRO_CLAUDE_AUTH_TOKEN:-ollama}"
-  export ANTHROPIC_MODEL="$CEREBRO_MODEL"
-  export ANTHROPIC_DEFAULT_HAIKU_MODEL="$CEREBRO_MODEL"
+  export ANTHROPIC_MODEL="$model"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="$model"
   unset ANTHROPIC_API_KEY
 }
 
-# The --allowedTools list for a claude child of the given role (all mutating;
-# the read-only reviewer runs under opencode regardless of backend, so it never
-# reaches this path).
+# The --allowedTools list for a claude child of the given role. The mutating
+# children (execute / apply-review / doc-write) and the capable verify child
+# (which starts servers and drives a browser) get the full editing surface; the
+# read-only reviewer (review / audit / improve, reached only when
+# CEREBRO_REVIEW_BACKEND=claude) is clamped to Read/Grep/Glob plus a read-only
+# Bash allow-list mirroring the opencode reviewer agent -- no Edit/Write/Web or
+# Playwright.
 backend_claude_child_allowed_tools() {
   case "$1" in
-    execute|apply-review|doc-write)
+    execute|apply-review|doc-write|verify)
       printf 'Read Edit Write Bash Grep Glob WebSearch WebFetch mcp__playwright__*' ;;
+    review|audit|improve)
+      printf 'Read Grep Glob Bash(git diff:*) Bash(git show:*) Bash(git log:*) Bash(git status:*) Bash(git rev-parse:*) Bash(git merge-base:*) Bash(git blame:*) Bash(git ls-files:*) Bash(git cat-file:*) Bash(grep:*) Bash(rg:*) Bash(cat:*) Bash(head:*) Bash(tail:*) Bash(sed -n:*) Bash(find:*) Bash(ls:*) Bash(wc:*) Bash(jq:*) Bash(test:*)' ;;
     *) die "backend_claude_child_allowed_tools: unknown role: $1" ;;
   esac
 }
@@ -71,7 +85,7 @@ backend_claude_child_run() {
         child_log="$6" msg_capture="$7" id_capture="$8" store_file="$9" ckey="${10}"
   local model="${11:-$CEREBRO_MODEL}"
 
-  backend_claude_endpoint_env
+  backend_claude_endpoint_env "$model"
 
   if (( pair )); then
     backend_claude_pair_run "$cwd" "$prompt" "$role" "$resume" \
@@ -95,7 +109,7 @@ backend_claude_child_run() {
 # passed via --append-system-prompt, not via an agent file.
 backend_claude_child_agent_name() {
   case "$1" in
-    execute|apply-review|doc-write|review|audit|verify) printf '%s\n' "$1" ;;
+    execute|apply-review|doc-write|review|audit|verify|improve) printf '%s\n' "$1" ;;
     *) die "backend_claude_child_agent_name: unknown role: $1" ;;
   esac
 }

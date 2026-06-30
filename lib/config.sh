@@ -17,12 +17,20 @@ CEREBRO_BACKEND="${CEREBRO_BACKEND:-opencode}"
 # endpoint (see CEREBRO_CLAUDE_BASE_URL below).
 CEREBRO_DEFAULT_MODEL="github-copilot/gemini-3.1-pro-preview"
 CEREBRO_MODEL="${CEREBRO_MODEL:-$CEREBRO_DEFAULT_MODEL}"
-# The model the read-only reviewer/auditor (cerebro review / cerebro audit) runs
-# on -- a deliberately DIFFERENT model from the implementer, so the review is a
-# genuinely independent pair of eyes. GPT-5.5 by default. The reviewer always
-# runs under opencode (regardless of CEREBRO_BACKEND), so it needs opencode on
-# PATH even when the editing children run under claude.
+# The model the read-only reviewer/auditor (cerebro review / cerebro audit /
+# cerebro verify / cerebro improve) runs on -- a deliberately DIFFERENT model
+# from the implementer, so the review is a genuinely independent pair of eyes.
+# GPT-5.5 by default. The reviewer runs under CEREBRO_REVIEW_BACKEND (opencode
+# by default); when that is opencode it needs opencode on PATH even if the
+# editing children run under claude.
 CEREBRO_REVIEW_MODEL="${CEREBRO_REVIEW_MODEL:-github-copilot/gpt-5.5}"
+# The backend the read-only reviewer (review / audit / verify / improve) runs
+# under, independent of CEREBRO_BACKEND so the reviewer can use a different CLI
+# than the orchestrator + editing children. opencode (the default, unchanged)
+# or claude. Not recorded in session metadata: the reviewer is ephemeral and a
+# backend mismatch on resume falls back to a fresh run via the existing
+# stale-fallback, so the env var at runtime is sufficient.
+CEREBRO_REVIEW_BACKEND="${CEREBRO_REVIEW_BACKEND:-opencode}"
 CEREBRO_TIMEOUT="${CEREBRO_TIMEOUT:-0}"   # 0/empty/none/unlimited = no cap
 # Inactivity timeout (seconds) for the child stream parser: if a spawned child
 # produces no new stream event for this window, parse_stream.py exits 5 with a
@@ -50,11 +58,13 @@ CEREBRO_CLAUDE_AUTH_TOKEN="${CEREBRO_CLAUDE_AUTH_TOKEN:-}"
 # cerebro ships its own opencode config tree (agents + plugin) under
 # $CEREBRO_HOME/.opencode and points every opencode invocation -- the
 # interactive orchestrator (when backend=opencode), every spawned opencode
-# child, and the read-only reviewer -- at it via OPENCODE_CONFIG_DIR. The
-# user's global ~/.config/opencode (auth, providers, models) still loads
-# underneath it, so credentials keep working; this dir only layers cerebro's
-# agents and the session-binding plugin on top. Always exported: the reviewer
-# runs under opencode even when the editing backend is claude.
+# child, and the read-only reviewer (when CEREBRO_REVIEW_BACKEND=opencode) --
+# at it via OPENCODE_CONFIG_DIR. The user's global ~/.config/opencode (auth,
+# providers, models) still loads underneath it, so credentials keep working;
+# this dir only layers cerebro's agents and the session-binding plugin on top.
+# Always exported: the reviewer defaults to opencode, and the editing backend
+# may be opencode too, so the tree is needed in the common case even when the
+# editing backend is claude.
 export OPENCODE_CONFIG_DIR="$CEREBRO_HOME/.opencode"
 
 # Max chars in a single harness overlay file. Larger than learnings' cap since

@@ -1,9 +1,10 @@
 # cerebro lib: backend
 # The single seam between cerebro's command modules and the agent CLI that
 # runs the orchestrator + mutating children (execute / apply-review /
-# doc-write / answer). The read-only reviewer (review / audit / improve)
-# ALWAYS runs under opencode regardless of CEREBRO_BACKEND, so it is not
-# dispatched here -- it goes straight through the opencode child path.
+# doc-write / answer) via the editing backend (CEREBRO_BACKEND), and the
+# read-only reviewer (review / audit / verify / improve) via the reviewer
+# backend (CEREBRO_REVIEW_BACKEND, opencode by default) through the
+# review_child_run / review_child_agent_name selectors below.
 #
 # Two backends implement the contract:
 #   opencode (default) -- `opencode run --agent` / `opencode --agent`
@@ -35,6 +36,39 @@
 # the session metadata (set by require_session into CEREBRO_RESUME_BACKEND).
 current_backend() {
   printf '%s' "${CEREBRO_RESUME_BACKEND:-${CEREBRO_BACKEND:-opencode}}"
+}
+
+# review_backend -- echo the backend the read-only reviewer (review / audit /
+# verify / improve) runs under, independent of the editing backend so the
+# reviewer can use a different CLI (e.g. claude) than the orchestrator +
+# editing children. Defaults to opencode (the historical behavior). Like
+# current_backend, this only echoes -- a bad value surfaces as a
+# `command not found` from the dispatched function, matching the editing
+# backend's failure mode. NOT read from session metadata: the reviewer is
+# ephemeral and a backend mismatch on resume falls back to a fresh run via the
+# existing stale-fallback, so the env var at runtime is sufficient.
+review_backend() {
+  printf '%s' "${CEREBRO_REVIEW_BACKEND:-opencode}"
+}
+
+# review_child_agent_name <role> -- the agent identifier the reviewer backend
+# uses to select a reviewer's role. opencode: an agent name (cerebro-reviewer /
+# cerebro-verify); claude: the role label itself (composed inline via
+# --append-system-prompt). Dispatched to the reviewer backend, not the editing
+# backend, so the reviewer is backend-selectable independently of CEREBRO_BACKEND.
+review_child_agent_name() {
+  "backend_$(review_backend)_child_agent_name" "$@"
+}
+
+# review_child_run <pair> <cwd> <prompt> <agent> <resume-id> <child_log>
+#   <msg_capture> <id_capture> <store_file> <ckey> [model] -- run one attempt
+# of a reviewer child (review / audit / verify / improve) through the reviewer
+# backend and return its exit code. Same contract as backend_child_run but
+# dispatched to review_backend (default opencode), so the read-only reviewer is
+# backend-selectable independently of CEREBRO_BACKEND. <model> defaults to
+# CEREBRO_REVIEW_MODEL at the call sites.
+review_child_run() {
+  "backend_$(review_backend)_child_run" "$@"
 }
 
 # backend_is <name> -- true when the active backend is <name>.

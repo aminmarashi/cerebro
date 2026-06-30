@@ -122,12 +122,12 @@ backend_opencode_resume_run() {
 }
 
 # backend_opencode_child_agent_name <role> -- the opencode agent name for a
-# child role (the basename of its agent file under .opencode/agent/). review
-# and audit share one read-only reviewer agent.
+# child role (the basename of its agent file under .opencode/agent/). review,
+# audit and improve share one read-only reviewer agent.
 backend_opencode_child_agent_name() {
   case "$1" in
     execute|apply-review|doc-write|verify) printf 'cerebro-%s\n' "$1" ;;
-    review|audit) printf 'cerebro-reviewer\n' ;;
+    review|audit|improve) printf 'cerebro-reviewer\n' ;;
     *) die "backend_opencode_child_agent_name: unknown role: $1" ;;
   esac
 }

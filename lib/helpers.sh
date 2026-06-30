@@ -165,8 +165,8 @@ The orchestrator runs with a restricted tool surface: read/grep/glob plus
 bash limited to `cerebro ...` (no edit, no write, no subagent delegation).
 Every git/gh action and every file edit happens inside a short-lived
 sub-agent that cerebro spawns; the orchestrator itself can't touch repos
-directly. The read-only reviewer always runs under opencode on an
-independent model, regardless of the editing backend.
+directly. The read-only reviewer runs under CEREBRO_REVIEW_BACKEND (opencode
+by default) on an independent model, regardless of the editing backend.
 
 Notes:
   * Interactive-only. cerebro refuses to run under a non-terminal parent
@@ -208,22 +208,28 @@ Notes:
     makes no direct repo changes -- it is the pair-programming "watcher"
     seat as a first-class session instead of a mode you ask for mid-chat.
   * Backends. CEREBRO_BACKEND selects the agent CLI for the orchestrator
-    + editing children: `opencode` (default) or `claude`. The reviewer
-    always runs under opencode. The chosen backend is recorded in each
-    session's metadata, so resuming a session always reuses the backend
-    it started with. Under `claude`, CEREBRO_CLAUDE_BASE_URL optionally
+    + editing children: `opencode` (default) or `claude`. CEREBRO_REVIEW_BACKEND
+    independently selects the CLI for the read-only reviewer (review / audit /
+    verify / improve): `opencode` (default) or `claude`, so the reviewer can
+    run under a different backend than the editor. The editing backend is
+    recorded in each session's metadata, so resuming a session always reuses
+    the backend it started with. Under `claude`, CEREBRO_CLAUDE_BASE_URL optionally
     points every spawned `claude` at a custom Anthropic-compatible endpoint
     (a local Ollama `/v1/messages` server, or any proxy/gateway) instead of
     the claude.ai subscription; empty (the default) keeps the subscription.
-    CEREBRO_MODEL then names a model the endpoint serves.
+    CEREBRO_MODEL then names a model the endpoint serves; when the reviewer
+    runs under claude, CEREBRO_REVIEW_MODEL names the review model the endpoint
+    serves.
 
-Requirements: opencode, jq, python3 on PATH. When CEREBRO_BACKEND=claude,
-claude is additionally required. Child runs additionally need git and gh
-on PATH for execute / apply-review / doc-write.
+Requirements: jq, python3 on PATH, plus opencode and/or claude depending on
+the configured backends (opencode is required when CEREBRO_BACKEND or
+CEREBRO_REVIEW_BACKEND is opencode; claude when either is claude). Child
+runs additionally need git and gh on PATH for execute / apply-review /
+doc-write.
 
-Env: CEREBRO_HOME, CEREBRO_BACKEND, CEREBRO_MODEL, CEREBRO_REVIEW_MODEL,
-CEREBRO_TIMEOUT, CEREBRO_OPENCODE_CMD, CEREBRO_CLAUDE_CMD,
-CEREBRO_CLAUDE_BASE_URL, CEREBRO_CLAUDE_AUTH_TOKEN,
+Env: CEREBRO_HOME, CEREBRO_BACKEND, CEREBRO_REVIEW_BACKEND, CEREBRO_MODEL,
+CEREBRO_REVIEW_MODEL, CEREBRO_TIMEOUT, CEREBRO_OPENCODE_CMD,
+CEREBRO_CLAUDE_CMD, CEREBRO_CLAUDE_BASE_URL, CEREBRO_CLAUDE_AUTH_TOKEN,
 CEREBRO_CHILD_SESSION_TTL, CEREBRO_PAIR_IDLE, CEREBRO_PAIR_STALL,
 CEREBRO_PAIR_STALL_BUSY, CEREBRO_PAIR_STALL_RETRIES,
 CEREBRO_PAIR_STALL_BACKOFF, CEREBRO_DEBUG.
@@ -251,15 +257,26 @@ require_interactive() {
 
 require_deps() {
   local cmd
-  # opencode is always required: the read-only reviewer runs under it
-  # regardless of the editing backend.
-  for cmd in "$CEREBRO_OPENCODE_CMD" jq python3; do
+  # jq + python3 are always required. opencode is required when the editing
+  # backend OR the review backend is opencode (the read-only reviewer runs
+  # under CEREBRO_REVIEW_BACKEND, opencode by default); claude is required
+  # when either backend is claude. So a run with CEREBRO_BACKEND=claude and
+  # CEREBRO_REVIEW_BACKEND=claude needs no opencode at all.
+  local need_opencode=0 need_claude=0
+  [[ "$(current_backend)"  == "opencode" ]] && need_opencode=1
+  [[ "$(review_backend)"   == "opencode" ]] && need_opencode=1
+  [[ "$(current_backend)"  == "claude"   ]] && need_claude=1
+  [[ "$(review_backend)"   == "claude"   ]] && need_claude=1
+  for cmd in jq python3; do
     command -v "$cmd" >/dev/null 2>&1 || die "missing required command on PATH: $cmd"
   done
-  # The claude backend additionally needs the claude CLI on PATH.
-  if [[ "$(current_backend)" == "claude" ]]; then
+  if (( need_opencode )); then
+    command -v "$CEREBRO_OPENCODE_CMD" >/dev/null 2>&1 \
+      || die "missing required command on PATH: $CEREBRO_OPENCODE_CMD (needed: CEREBRO_BACKEND or CEREBRO_REVIEW_BACKEND is opencode)"
+  fi
+  if (( need_claude )); then
     command -v "$CEREBRO_CLAUDE_CMD" >/dev/null 2>&1 \
-      || die "missing required command on PATH: $CEREBRO_CLAUDE_CMD (CEREBRO_BACKEND=claude)"
+      || die "missing required command on PATH: $CEREBRO_CLAUDE_CMD (needed: CEREBRO_BACKEND or CEREBRO_REVIEW_BACKEND is claude)"
   fi
 }
 
@@ -370,10 +387,11 @@ build_timeout_cmd() {
 
 # Write the shared home payloads, then the backend-specific extras. The
 # opencode config tree ($CEREBRO_HOME/.opencode: agents + plugin + base config)
-# is ALWAYS written because the read-only reviewer runs under opencode
-# regardless of CEREBRO_BACKEND, and the opencode backend's editing children +
-# orchestrator agent files live there too. Idempotent: managed files are
-# overwritten only when their content differs.
+# is ALWAYS written: the reviewer defaults to opencode (CEREBRO_REVIEW_BACKEND)
+# and the opencode editing backend's children + orchestrator agent files live
+# there too, so the tree is needed in the common case even when the editing
+# backend is claude. Idempotent: managed files are overwritten only when their
+# content differs.
 #
 # Agent files contain ONLY the static shipped prompts. User-owned learnings
 # and overlays are kept in their own files under $CEREBRO_HOME so the model can

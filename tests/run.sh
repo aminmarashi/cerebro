@@ -1876,6 +1876,167 @@ else
 fi
 
 # ========================================================================
+# 129x. CEREBRO_REVIEW_BACKEND=claude -- the read-only reviewer can run under
+# the claude CLI instead of opencode. Unit checks (no CLI needed) for the
+# dispatch, the claude reviewer tool clamp, the reviewer system prompt, and the
+# endpoint-env model pin; then one integration run with a `claude` stub that
+# emits a stream-json event stream whose result text is the findings.
+# ========================================================================
+
+# --- 129a. review_child_agent_name maps reviewer roles under the DEFAULT
+# (opencode) review backend: review/audit/improve -> cerebro-reviewer,
+# verify -> cerebro-verify. ---
+rb_default="$(bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; shift
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/backend.sh"
+  . "$CEREBRO_LIB_DIR/backend-opencode.sh"
+  for r in "$@"; do printf "%s|" "$(review_child_agent_name "$r")"; done' \
+  _ "$here/../lib" review audit verify improve 2>/dev/null)"
+if [[ "$rb_default" == "cerebro-reviewer|cerebro-reviewer|cerebro-verify|cerebro-reviewer|" ]]; then
+  printf 'PASS  129a review_child_agent_name default opencode roles\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  129a review_child_agent_name default [%s]\n' "$rb_default"; fail=$((fail + 1))
+  failures+=("129a review_child_agent_name default :: $rb_default")
+fi
+
+# --- 129b. under CEREBRO_REVIEW_BACKEND=claude, review_child_agent_name
+# returns the role label itself (composed inline via --append-system-prompt). ---
+rb_claude="$(CEREBRO_REVIEW_BACKEND=claude bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; shift
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/backend.sh"
+  . "$CEREBRO_LIB_DIR/backend-opencode.sh"
+  . "$CEREBRO_LIB_DIR/backend-claude.sh"
+  for r in "$@"; do printf "%s|" "$(review_child_agent_name "$r")"; done' \
+  _ "$here/../lib" review audit verify improve 2>/dev/null)"
+if [[ "$rb_claude" == "review|audit|verify|improve|" ]]; then
+  printf 'PASS  129b review_child_agent_name claude role labels\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  129b review_child_agent_name claude [%s]\n' "$rb_claude"; fail=$((fail + 1))
+  failures+=("129b review_child_agent_name claude :: $rb_claude")
+fi
+
+# --- 129c. claude reviewer tool clamp: review/audit/improve are read-only
+# (Read/Grep/Glob + a read-only Bash allow-list, NO Edit/Write/Playwright);
+# verify is capable (Edit + Playwright), same surface as the mutating children. ---
+ro_tools="$(CEREBRO_REVIEW_BACKEND=claude bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; shift
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/backend-claude.sh"
+  backend_claude_child_allowed_tools "$1"' _ "$here/../lib" review 2>/dev/null)"
+verify_tools="$(CEREBRO_REVIEW_BACKEND=claude bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; shift
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/backend-claude.sh"
+  backend_claude_child_allowed_tools "$1"' _ "$here/../lib" verify 2>/dev/null)"
+if [[ "$ro_tools" == *"Read"* && "$ro_tools" == *"Grep"* && "$ro_tools" != *"Edit"* \
+      && "$ro_tools" != *"Write"* && "$ro_tools" != *"mcp__playwright"* ]] \
+   && grep -qF -- 'Bash(git diff:*)' <<<"$ro_tools" \
+   && [[ "$verify_tools" == *"Edit"* && "$verify_tools" == *"mcp__playwright__*" ]]; then
+  printf 'PASS  129c claude reviewer tools read-only; verify capable\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  129c claude reviewer tools [ro=%s verify=%s]\n' "$ro_tools" "$verify_tools"; fail=$((fail + 1))
+  failures+=("129c claude reviewer tools :: ro=$ro_tools verify=$verify_tools")
+fi
+
+# --- 129d. claude reviewer system prompt carries the read-only reviewer note
+# (the same body the opencode reviewer_agent_file carries). ---
+rsp="$(CEREBRO_REVIEW_BACKEND=claude bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; shift
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/payloads.sh"
+  child_sys_prompt "$1"' _ "$here/../lib" review 2>/dev/null)"
+if [[ "$rsp" == *"READ-ONLY reviewer"* && "$rsp" == *"git diff"* ]]; then
+  printf 'PASS  129d claude reviewer sys prompt is the read-only note\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  129d claude reviewer sys prompt [%s]\n' "$rsp"; fail=$((fail + 1))
+  failures+=("129d claude reviewer sys prompt :: $rsp")
+fi
+
+# --- 129e. backend_claude_endpoint_env pins the gateway to the supplied model
+# (the review model for the reviewer path) and still dies when the effective
+# model is the shipped editing default. ---
+pin="$(CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/backend-claude.sh"
+  backend_claude_endpoint_env "$CEREBRO_REVIEW_MODEL"
+  printf "%s" "$ANTHROPIC_MODEL"' _ "$here/../lib" 2>/dev/null)"
+die_rc=0
+CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/backend-claude.sh"
+  backend_claude_endpoint_env' _ "$here/../lib" >/dev/null 2>&1 || die_rc=$?
+if [[ "$pin" == "github-copilot/gpt-5.5" ]] && (( die_rc != 0 )); then
+  printf 'PASS  129e endpoint_env pins review model; dies on editing default\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  129e endpoint_env [pin=%s die_rc=%d]\n' "$pin" "$die_rc"; fail=$((fail + 1))
+  failures+=("129e endpoint_env :: pin=$pin die_rc=$die_rc")
+fi
+
+# claude reviewer stub: emulate `claude -p` for the read-only reviewer -- log
+# argv (to assert -p / review model / read-only allowedTools) and emit a
+# stream-json event stream whose result text is the findings. The task prompt
+# arrives on stdin (discarded).
+CLAUDE_STUB_DIR="$WORKDIR/claude-review-stub"
+mkdir -p "$CLAUDE_STUB_DIR"
+CLAUDE_REVIEW_ARGV="$WORKDIR/claude-review-argv.log"
+CRSID="CLAUDESESS-1"
+cat > "$CLAUDE_STUB_DIR/claude" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$CLAUDE_REVIEW_ARGV"
+cat >/dev/null
+printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$CRSID"
+printf '{"type":"result","subtype":"success","result":"## Findings: no issues found"}\n'
+exit 0
+EOF
+chmod +x "$CLAUDE_STUB_DIR/claude"
+
+if [[ -x "$CLAUDE_STUB_DIR/claude" ]]; then
+  CLAUDE_STUB_PATH="$CLAUDE_STUB_DIR:$PATH"
+  CSESS="claude-review-session"; CDIR="$CEREBRO_HOME/sessions/$CSESS"
+  mkdir -p "$CDIR/children"; : > "$CDIR/transcript.jsonl"
+
+  # --- 129f. CEREBRO_REVIEW_BACKEND=claude runs `claude -p` on the review
+  # model with the read-only allowedTools and records provider=claude. ---
+  : > "$CLAUDE_REVIEW_ARGV"
+  crev_out="$(env PATH="$CLAUDE_STUB_PATH" CEREBRO_REVIEW_BACKEND=claude \
+    CEREBRO_SESSION_ID="$CSESS" "$CEREBRO_BIN" review "$REPO" 2>/dev/null)"
+  crev_argv="$(cat "$CLAUDE_REVIEW_ARGV")"
+  crev_id="$(jq -r '.[] | select(.provider=="claude" and .role=="review") | .id' \
+    "$CDIR/child-sessions.json" 2>/dev/null)"
+  if [[ "$crev_id" == "$CRSID" && "$crev_argv" == *"-p"* \
+        && "$crev_argv" == *"--model github-copilot/gpt-5.5"* \
+        && "$crev_argv" == *"Read"* && "$crev_argv" != *"Edit"* \
+        && "$crev_argv" != *"mcp__playwright"* ]] \
+     && grep -qF -- 'Bash(git diff:*)' <<<"$crev_argv" \
+     && [[ -s "$crev_out" && "$(grep -c 'no issues found' "$crev_out")" -ge 1 ]]; then
+    printf 'PASS  129f review under claude: claude -p + review model + read-only tools + provider=claude\n'; pass=$((pass + 1))
+  else
+    printf 'FAIL  129f review under claude [id=%s argv=%s out=%s]\n' "$crev_id" "$crev_argv" "$crev_out"; fail=$((fail + 1))
+    failures+=("129f review under claude :: id=$crev_id argv=$crev_argv out=$crev_out")
+  fi
+else
+  printf 'SKIP  129f review under claude (claude stub unavailable)\n'
+fi
+
+# ========================================================================
 # 131-139. Pair-programming mode (--pair). A paired child runs under a private
 # headless `opencode serve`; cerebro POSTs the task to a session on it, streams
 # the session's events back into the child log (in run-format), and after each

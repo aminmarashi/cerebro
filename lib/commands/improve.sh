@@ -73,12 +73,12 @@ $context
   # event stream is tee'd to child_log. cwd is the repo so the reviewer cites
   # the real harness files; the read-only sandbox still reads the traces under
   # $CEREBRO_HOME.
-  # The reviewer always runs under opencode regardless of CEREBRO_BACKEND.
-  local agent; agent="$(backend_opencode_child_agent_name audit)"
+  # The reviewer runs under CEREBRO_REVIEW_BACKEND (opencode by default).
+  local agent; agent="$(review_child_agent_name improve)"
   local rc id_capture out_capture; id_capture="$(mktemp)"; out_capture="$(mktemp)"
 
-  child_store_begin "$ckey" opencode improve "$repo" improve "$child_log" "${prior:+preserve-id}"
-  backend_opencode_child_run 0 "$repo" "$improve_prompt" "$agent" "$prior" \
+  child_store_begin "$ckey" "$(review_backend)" improve "$repo" improve "$child_log" "${prior:+preserve-id}"
+  review_child_run 0 "$repo" "$improve_prompt" "$agent" "$prior" \
     "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
   rc=$?
 
@@ -88,8 +88,8 @@ $context
     log_event "improve_resume_failed" "rc=$rc resume=$prior; retrying fresh"
     warn "improve: resume of $prior failed (rc=$rc); retrying without resume"
     : > "$id_capture"
-    child_store_begin "$ckey" opencode improve "$repo" improve "$child_log"
-    backend_opencode_child_run 0 "$repo" "$improve_prompt" "$agent" "" \
+    child_store_begin "$ckey" "$(review_backend)" improve "$repo" improve "$child_log"
+    review_child_run 0 "$repo" "$improve_prompt" "$agent" "" \
       "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
     rc=$?
   fi

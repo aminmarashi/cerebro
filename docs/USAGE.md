@@ -249,9 +249,11 @@ Env vars (all optional):
 | var | meaning | default |
 |-----|---------|---------|
 | `CEREBRO_HOME` | base dir for all state | `~/.cerebro` |
+| `CEREBRO_BACKEND` | agent CLI for the orchestrator + editing children | `opencode` |
+| `CEREBRO_REVIEW_BACKEND` | agent CLI for the read-only reviewer (`review` / `audit` / `verify` / `improve`), independent of `CEREBRO_BACKEND` so the reviewer can use a different backend than the editor | `opencode` |
 | `CEREBRO_MODEL` | model alias for child `claude -p` | provider default |
-| `CEREBRO_REVIEW_MODEL` | model alias for `codex exec` | provider default |
-| `CEREBRO_CLAUDE_BASE_URL` | optional Anthropic-compatible endpoint for the claude backend (e.g. a local Ollama `/v1/messages` server, or any proxy). empty = the claude.ai subscription `claude` is logged into. when set, `CEREBRO_MODEL` must name a model the endpoint serves | empty (subscription) |
+| `CEREBRO_REVIEW_MODEL` | model alias for the read-only reviewer | `github-copilot/gpt-5.5` |
+| `CEREBRO_CLAUDE_BASE_URL` | optional Anthropic-compatible endpoint for the claude backend (e.g. a local Ollama `/v1/messages` server, or any proxy). empty = the claude.ai subscription `claude` is logged into. when set, the effective model (`CEREBRO_MODEL`, or `CEREBRO_REVIEW_MODEL` when the reviewer runs under claude) must name a model the endpoint serves | empty (subscription) |
 | `CEREBRO_CLAUDE_AUTH_TOKEN` | bearer token for `CEREBRO_CLAUDE_BASE_URL` (local no-auth servers ignore it; set the real key for an authed gateway) | `ollama` |
 | `CEREBRO_TIMEOUT` | wall-clock cap (s) per child call | `0` (no cap, so e2e runs and CI waits are never killed) |
 | `CEREBRO_CHILD_SESSION_TTL` | how long (s) a stored child id stays resumable | `86400` (24h) |
@@ -291,6 +293,26 @@ For an authenticated gateway, set `CEREBRO_CLAUDE_AUTH_TOKEN` to the
 real key (the default is a placeholder local no-auth servers ignore).
 Small local models (7B-14B) frequently botch tool-call JSON and will
 struggle with cerebro's agentic loop; pick the largest model you can run.
+
+### Reviewer under claude
+
+The read-only reviewer (`cerebro review` / `audit` / `verify` / `improve`)
+runs under `CEREBRO_REVIEW_BACKEND`, which defaults to `opencode` (on
+`CEREBRO_REVIEW_MODEL`, an independent model) so it stays a genuinely
+independent pair of eyes. Set `CEREBRO_REVIEW_BACKEND=claude` to run it under
+the `claude` CLI instead -- e.g. to review on a Claude model, or to keep the
+whole stack on one provider:
+
+```bash
+CEREBRO_REVIEW_BACKEND=claude CEREBRO_REVIEW_MODEL=<claude-model-alias> cerebro
+```
+
+When `CEREBRO_REVIEW_BACKEND=claude` and `CEREBRO_CLAUDE_BASE_URL` is set, the
+reviewer points at the same custom endpoint as the editing children, and
+`CEREBRO_REVIEW_MODEL` must then name a model that endpoint serves (cerebro
+pins the gateway to the review model, not the editing model, for the reviewer
+run). With `CEREBRO_CLAUDE_BASE_URL` unset the reviewer uses the claude.ai
+subscription `claude` is logged into.
 
 ## Session state
 

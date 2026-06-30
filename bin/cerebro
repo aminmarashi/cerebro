@@ -6,8 +6,8 @@
 # with a restricted tool surface (read/grep/glob plus Bash limited to
 # `cerebro ...`) and a system prompt that catalogues the cerebro sub-commands.
 # The user talks only to the orchestrator; the orchestrator spawns short-lived
-# sub-agents (editing children via the configured backend, read-only review
-# always via opencode) via those sub-commands.
+# sub-agents (editing children via the configured backend, read-only review via
+# CEREBRO_REVIEW_BACKEND, opencode by default) via those sub-commands.
 #
 # This file is a thin entry point: it resolves its own location (even when
 # invoked through a symlink on PATH), sources the modular library under ../lib,
@@ -20,9 +20,10 @@
 #   cerebro --resume [<id>]       # resume a session (id, or most recent)
 #   cerebro list                  # list sessions, newest first
 #
-# Required: opencode, jq, python3 on PATH. When CEREBRO_BACKEND=claude, claude
-# is additionally required. Child runs additionally need git and gh for
-# execute / apply-review / doc-write to function.
+# Required: jq, python3 on PATH, plus opencode and/or claude depending on the
+# configured backends (see CEREBRO_BACKEND and CEREBRO_REVIEW_BACKEND; each is
+# required when the backend it selects is in use). Child runs additionally need
+# git and gh for execute / apply-review / doc-write to function.
 #
 # Env:
 #   CEREBRO_HOME          base dir (default: $HOME/.cerebro)
@@ -30,8 +31,12 @@
 #                         opencode (default) or claude
 #   CEREBRO_MODEL         provider/model for the orchestrator + editing children
 #                         (default: github-copilot/gemini-3.1-pro-preview)
-#   CEREBRO_REVIEW_MODEL  provider/model for the read-only reviewer/auditor
-#                         (always opencode; default: github-copilot/gpt-5.5)
+#   CEREBRO_REVIEW_MODEL  provider/model for the read-only reviewer
+#                         (review / audit / verify / improve; runs under
+#                         CEREBRO_REVIEW_BACKEND; default: github-copilot/gpt-5.5)
+#   CEREBRO_REVIEW_BACKEND
+#                         backend for the read-only reviewer, independent of
+#                         CEREBRO_BACKEND: opencode (default) or claude
 #   CEREBRO_TIMEOUT       seconds for child agent calls; 0/empty/none/
 #                         unlimited = no cap (default: 0, no cap)
 #   CEREBRO_OPENCODE_CMD  opencode executable (default: opencode)
