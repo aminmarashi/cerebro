@@ -18,7 +18,7 @@ overlay_body() {   # $1=target; echoes body only if present + non-whitespace
   local f; f="$(overlay_file "$1")"
   [[ -s "$f" ]] || return 0
   local b; b="$(cat "$f")"
-  [[ -n "${b//[[:space:]]/}" ]] && printf '%s' "$b"
+  [[ "$b" =~ [^[:space:]] ]] && printf '%s' "$b"
 }
 
 # orchestrator_handle -- resolve the stable orchestrator identifier for the

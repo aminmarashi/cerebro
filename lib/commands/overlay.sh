@@ -43,7 +43,7 @@ cmd_overlay_set() {
   overlay_target_ok "$target" \
     || die "overlay set: unknown target '$target'; valid targets: $CEREBRO_OVERLAY_TARGETS"
   local text="${*:-}"
-  [[ -n "${text//[[:space:]]/}" ]] || die "usage: cerebro overlay set $target \"<text>\""
+  [[ "$text" =~ [^[:space:]] ]] || die "usage: cerebro overlay set $target \"<text>\""
   local n=${#text}
   if (( n > CEREBRO_OVERLAY_CAP )); then
     die "overlay set: too large (${n} chars > ${CEREBRO_OVERLAY_CAP}). Overlays are appended onto a shipped prompt -- keep them to a few focused additions."

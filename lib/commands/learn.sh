@@ -17,7 +17,7 @@ CEREBRO_LEARN_CAP="${CEREBRO_LEARN_CAP:-1600}"
 cmd_learn_note() {
   require_session
   local text="${*:-}"
-  [[ -n "${text//[[:space:]]/}" ]] || die "usage: cerebro learn-note \"<observation>\""
+  [[ "$text" =~ [^[:space:]] ]] || die "usage: cerebro learn-note \"<observation>\""
   local f; f="$(pending_learnings_file)"
   if [[ ! -f "$f" ]]; then
     printf '# Pending learnings\n\nObserved preference signals awaiting confirmation -- one signal per line.\nPromote a signal to active learnings (cerebro learn-set) only once the\nevidence here is clear and repeated; when unsure, ask the user first.\n\n' > "$f"
@@ -49,7 +49,7 @@ cmd_learn_set() {
   if (( use_stdin )); then
     text="$(cat)" || die "learn-set: failed to read body from stdin"
   fi
-  [[ -n "${text//[[:space:]]/}" ]] \
+  [[ "$text" =~ [^[:space:]] ]] \
     || die "usage: cerebro learn-set \"<consolidated learnings>\" [--stdin]"$'\n'"  # --stdin reads the body from stdin (preferred for large learnings)"
   local n=${#text}
   if (( n > CEREBRO_LEARN_CAP )); then
@@ -82,4 +82,3 @@ cmd_learnings() {
     echo "  (none yet)"
   fi
 }
-

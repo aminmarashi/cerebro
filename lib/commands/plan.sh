@@ -62,7 +62,7 @@ cmd_plan() {
     [[ -f "$from_file" ]] || die "plan: --from-file not a regular file: $from_file"
     content="$(cat -- "$from_file")" || die "plan: failed to read body from $from_file"
   fi
-  [[ -n "${content//[[:space:]]/}" ]] \
+  [[ "$content" =~ [^[:space:]] ]] \
     || die "usage: cerebro plan \"<plan markdown>\" [--out <name>] [--stdin] [--from-file <path>]"$'\n'"  # body from an inline arg, --stdin, or --from-file; use --from-file for large plans"
 
   local plans_dir="$CEREBRO_SESSION_DIR/plans"

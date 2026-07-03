@@ -44,7 +44,7 @@ spec_set() {
   if (( use_stdin )); then
     text="$(cat)" || die "spec set: failed to read body from stdin"
   fi
-  [[ -n "${text//[[:space:]]/}" ]] \
+  [[ "$text" =~ [^[:space:]] ]] \
     || die "usage: cerebro spec set \"<specification and requirements>\" [--stdin]"$'\n'"  # --stdin reads the body from stdin (preferred for large specs)"
   local sf hf ts
   sf="$(spec_file)"; hf="$(spec_history_file)"
@@ -93,4 +93,3 @@ spec_history() {
   fi
   python3 "$CEREBRO_LIB_DIR/python/spec_history.py" "$hf"
 }
-
