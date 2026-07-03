@@ -230,9 +230,16 @@ EOF
 }
 
 # orchestrator_agent_file -- the opencode agent markdown for the interactive
-# orchestrator. Its tools are clamped so it can never touch a repo directly: no
-# edit/write, no Task delegation, and bash denied except `cerebro ...`.
-# Read/grep/glob and web tools stay on. Body is the static system-prompt.md only;
+# orchestrator. Its tools are clamped so it can never touch a repo directly:
+# no edit/write anywhere except a per-session scratch dir under
+# /tmp/cerebro-*/ (a non-Bash channel for landing large plan bodies fast,
+# ingested by `cerebro plan --from-file`), no Task delegation, and bash denied
+# except `cerebro ...`. The agent file is shared + byte-for-byte stable across
+# sessions (so it can be prompt-cached), so the write scope is a /tmp/cerebro-*/
+# namespace wildcard, not a single session's id -- the orchestrator writes to
+# /tmp/cerebro-<its-own-session-id>/ (given by `cerebro plan --scratch-dir`), so
+# concurrent sessions use disjoint dirs and don't clobber each other. Read/grep
+# /glob and web tools stay on. Body is the static system-prompt.md only;
 # user-owned local overlays and learnings are no longer appended here, so this
 # file is byte-for-byte stable across launches and can be prompt-cached.
 orchestrator_agent_file() {
@@ -241,8 +248,12 @@ orchestrator_agent_file() {
 description: cerebro orchestrator -- drives the plan/execute/review loop via cerebro subcommands
 mode: primary
 permission:
-  edit: deny
-  write: deny
+  edit:
+    "*": deny
+    "/tmp/cerebro-*/**": allow
+  write:
+    "*": deny
+    "/tmp/cerebro-*/**": allow
   task: deny
   external_directory: allow
   bash:

@@ -14,24 +14,56 @@ cmd_plan() {
 
   local content=""
   local use_stdin=0
+  local from_file=""
+  local scratch_dir=0
   local out_name=""
   local args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --out) shift; out_name="${1:-}"; shift || true ;;
       --stdin) use_stdin=1; shift ;;
+      --from-file) shift; from_file="${1:-}"; shift || true ;;
+      --scratch-dir) scratch_dir=1; shift ;;
       *) args+=("$1"); shift ;;
     esac
   done
+
+  # --scratch-dir: print this session's private scratch directory and stop.
+  # The orchestrator has no repo-mutation tools and only a /tmp-scoped Write,
+  # so LARGE plan bodies are staged in /tmp before `cerebro plan --from-file`
+  # ingests them. The dir is namespaced by the session id so concurrent cerebro
+  # sessions never clobber each other's staging files. The orchestrator asks
+  # for this path once (cerebro owns it -- no fragile path construction), Write
+  # tool drops the body at <scratch-dir>/<name>.md, then --from-file records it.
+  if (( scratch_dir )); then
+    local sd="/tmp/cerebro-$CEREBRO_SESSION_ID"
+    mkdir -p "$sd" || die "plan: cannot create scratch dir: $sd"
+    printf '%s\n' "$sd"
+    return 0
+  fi
+
   if (( ${#args[@]} > 0 )); then content="${args[*]}"; fi
-  # --stdin plus an inline positional body is ambiguous.
-  (( use_stdin )) && [[ -n "$content" ]] \
-    && die "plan: --stdin and an inline body are mutually exclusive"
+  # The body may come from exactly one of: an inline positional, --stdin,
+  # or --from-file. Any two is ambiguous.
+  local src_count=0
+  [[ -n "$content" ]] && src_count=$((src_count+1))
+  (( use_stdin )) && src_count=$((src_count+1))
+  [[ -n "$from_file" ]] && src_count=$((src_count+1))
+  (( src_count > 1 )) && die "plan: --stdin, --from-file, and an inline body are mutually exclusive"
   if (( use_stdin )); then
     content="$(cat)" || die "plan: failed to read body from stdin"
+  elif [[ -n "$from_file" ]]; then
+    # Read the body from a file instead of the command string. This is the
+    # fast path for LARGE plans: the orchestrator drops the markdown with its
+    # Write tool (no Bash-command-text transport) to a /tmp path, then hands
+    # cerebro just the path -- a tiny command. Piping a big body through the
+    # Bash tool's command string is super-linear in size and hits the 120s/
+    # 300s timeout even for the --stdin heredoc form; --from-file sidesteps it.
+    [[ -f "$from_file" ]] || die "plan: --from-file not a regular file: $from_file"
+    content="$(cat -- "$from_file")" || die "plan: failed to read body from $from_file"
   fi
   [[ -n "${content//[[:space:]]/}" ]] \
-    || die "usage: cerebro plan \"<plan markdown>\" [--out <name>] [--stdin]"$'\n'"  # --stdin reads the body from stdin (preferred for large plans)"
+    || die "usage: cerebro plan \"<plan markdown>\" [--out <name>] [--stdin] [--from-file <path>]"$'\n'"  # body from an inline arg, --stdin, or --from-file; use --from-file for large plans"
 
   local plans_dir="$CEREBRO_SESSION_DIR/plans"
   mkdir -p "$plans_dir"

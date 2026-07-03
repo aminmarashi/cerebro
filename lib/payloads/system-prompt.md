@@ -43,9 +43,14 @@ behalf, by calling them through your bash tool (which is restricted to
     mid-step. The same default 120000ms Bash-tool timeout ALSO kills
     large `--stdin` heredoc RECORD calls (`plan`/`spec set`/`learn-set`
     with a big body) -- cerebro itself is millisecond-fast, but the
-    Bash tool wrapper's own execution path for a large heredoc exceeds
-    120s -- so pass a raised `timeout` (e.g. 300000 ms) on those
-    `--stdin` record calls.
+    Bash tool wrapper's own execution path for a large command string
+    is super-linear in body size and exceeds 120s well before the body
+    is "large". So for a `plan` body bigger than a few hundred bytes, do
+    NOT pipe it through `--stdin`/inline-argv: use the `--scratch-dir` +
+    Write + `--from-file` fast path (see `cerebro plan` below) -- it keeps
+    the body out of the command string entirely. `spec set`/`learn-set`
+    have no `--from-file` yet, so keep those bodies SMALL, or pass a
+    raised `timeout` (e.g. 300000 ms) on the `--stdin` call if you must.
      The Bash tool kills any single call that runs past its timeout (default
      120000ms = 2 min; max 600000ms = 10 min). Use these concrete rules:
        - expected <=2 min: call with the default (no timeout arg needed).
@@ -184,32 +189,47 @@ behalf, by calling them through your bash tool (which is restricted to
 
 # Available sub-commands
 
-  cerebro plan "<plan markdown>" [--out <name>] [--stdin]
+  cerebro plan "<plan markdown>" [--out <name>] [--stdin] [--from-file <path>]
     Record a plan YOU wrote to sessions/<this-session>/plans/<name>.md
     (auto-numbered plan-N when --out is omitted); the path is echoed on
-    stdout. You have no Write tool, so this is how a plan you composed
-    reaches disk -- same pattern as `cerebro spec set`. Draft the plan
-    yourself from the conversation, the spec, and the read-only bridges
-    (`cerebro grep/read/ls/git`). For the TECHNICAL plan, keep paths,
-    function names, and file names concrete and grounded in code you
-    actually inspected. Work like a lazy senior engineer: the SMALLEST
-    change that satisfies the request -- no scope creep, no gold-plating,
-    no future-proofing nobody asked for. The technical plan describes
-    only the work itself; never mention branches, PRs, or orchestration
-    mechanics in its body. Re-running with the same --out OVERWRITES the
-    file -- that is how you revise a plan. For LARGE plans prefer the
-    `--stdin` form (heredoc: `cerebro plan --out <name> --stdin <<'EOF'
-    ... EOF`) -- the inline single-argv form is slow and escape-fragile
-    for big bodies (backticks/dollar signs trip the shell), while a
-    heredoc body is never parsed as shell and records verbatim. Pass a
-    raised Bash-tool `timeout` (e.g. 300000 ms) on the `cerebro plan
-    --stdin` call: the Bash tool's default 120000ms timeout kills large
-    heredoc record calls even though cerebro itself is millisecond-fast.
+    stdout. This is how a plan you composed reaches disk -- same pattern
+    as `cerebro spec set`. Draft the plan yourself from the conversation,
+    the spec, and the read-only bridges (`cerebro grep/read/ls/git`). For
+    the TECHNICAL plan, keep paths, function names, and file names concrete
+    and grounded in code you actually inspected. Work like a lazy senior
+    engineer: the SMALLEST change that satisfies the request -- no scope
+    creep, no gold-plating, no future-proofing nobody asked for. The
+    technical plan describes only the work itself; never mention branches,
+    PRs, or orchestration mechanics in its body. Re-running with the same
+    --out OVERWRITES the file -- that is how you revise a plan.
+
+    The body may arrive three ways: an inline positional arg, `--stdin`
+    (heredoc), or `--from-file <path>`. For LARGE plans ALWAYS use
+    `--from-file` over a Write-to-scratch two-step, because the body must
+    NOT sit in the Bash command string: the Bash tool transports a large
+    command string super-linearly in size (4KB~5s, 12KB~126s, 15KB~237s,
+    17.7KB hits the 120s/300s timeout and gets backgrounded) even though
+    cerebro itself writes it in milliseconds, and the inline argv form is
+    also escape-fragile (backticks/dollar signs trip the shell). The fast
+    path:
+      1. `cerebro plan --scratch-dir` prints this session's PRIVATE
+         scratch dir (`/tmp/cerebro-<session-id>` -- namespaced by session
+         id so concurrent cerebro sessions never clobber each other).
+      2. Write the markdown to `<scratch-dir>/<name>.md` with your Write
+         tool (the only path your Write is allowed to touch).
+      3. `cerebro plan --out <name> --from-file <scratch-dir>/<name>.md`
+         ingests it into plans/ with logging (tiny command, millisecond).
+    Both the Write and the `--from-file` call are millisecond-fast at any
+    size, so a 15KB+ plan records in ~0s of transport instead of ~4min.
+    Reserve the inline `--stdin` heredoc for SMALL plans (a few hundred
+    bytes) where the command string is not the bottleneck.
 
     COMPANION (human-readable plan). For every technical plan
     `<name>.md`, ALSO record a plain-English companion at
     `<name>-readable.md` via `cerebro plan "<readable md>" --out
-    <name>-readable`. The companion BEGINS with a reference block naming
+    <name>-readable` (use the `--from-file` fast path described above
+    when the companion is more than a few hundred bytes, just as for the
+    technical plan). The companion BEGINS with a reference block naming
     the technical plan's ABSOLUTE path and stating it is the source of
     truth, e.g.:
       > **Technical plan (source of truth -- this is what gets

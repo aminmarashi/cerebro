@@ -153,10 +153,20 @@ backend_claude_launch_orchestrator() {
   local sess_dir="$1" prompt_file="$2"
   backend_claude_endpoint_env
   local sid; sid="$(basename "$sess_dir")"
+  # Write is granted ONLY under this session's /tmp scratch dir: the
+  # orchestrator has no repo-mutation tools, but it needs a non-Bash channel to
+  # land large plan bodies on disk fast. It writes a plan to
+  # /tmp/cerebro-<session-id>/<name>.md with Write, then ingests it via
+  # `cerebro plan --from-file` -- see lib/commands/plan.sh. Piping a multi-KB
+  # plan through the Bash command string is super-linear in size and trips the
+  # 120s/300s Bash-tool timeout; a scoped Write sidesteps that without giving
+  # the orchestrator any path into the repo. Scoping by <session-id> means
+  # concurrent cerebro sessions have disjoint scratch dirs and can't clobber
+  # each other's staging files.
   exec "$CEREBRO_CLAUDE_CMD" \
     --session-id "$sid" \
     --append-system-prompt-file "$prompt_file" \
-    --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__*"
+    --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Write(/tmp/cerebro-$sid/**)"
 }
 
 # backend_claude_launch_observer <sess_dir> <prompt> <target> -- exec the
@@ -190,18 +200,19 @@ backend_claude_launch_observer() {
 backend_claude_resume_orchestrator() {
   local sess_dir="$1" id="$2" prompt_file="$3"
   backend_claude_endpoint_env
+  local sid; sid="$(basename "$sess_dir")"
   if [[ -n "$id" ]]; then
     exec "$CEREBRO_CLAUDE_CMD" \
       --resume "$id" \
       --append-system-prompt-file "$prompt_file" \
-      --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__*"
+      --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Write(/tmp/cerebro-$sid/**)"
   else
     # Bare resume: claude shows its own picker. The hook writes the
     # current-session symlink as soon as the user submits their first prompt.
     exec "$CEREBRO_CLAUDE_CMD" \
       --resume \
       --append-system-prompt-file "$prompt_file" \
-      --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__*"
+      --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Write(/tmp/cerebro-$sid/**)"
   fi
 }
 
