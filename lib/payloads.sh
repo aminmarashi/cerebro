@@ -305,6 +305,33 @@ EOF
   cat "$(cerebro_payloads_dir)/system-prompt.md"
 }
 
+# claude_orchestrator_agent_file -- the Claude Code main-thread agent markdown
+# for the cerebro orchestrator, used by the ACP path (claude-agent-acp). The
+# claude TUI path does NOT use an agent file (it pins via --append-system-prompt
+# + --allowedTools on the CLI); this file exists so `cerebro acp` can pin the
+# restricted orchestrator through claude-agent-acp's `agent` config option,
+# which calls the SDK's applyFlagSettings({agent: "cerebro-orchestrator"}) --
+# the same selection path as `claude --agent`, so the frontmatter `tools:` is
+# hard-enforced. The tool surface mirrors the opencode orchestrator agent
+# (orchestrator_agent_file): read/grep/glob + web + Bash limited to `cerebro`,
+# plus a scoped Write/Edit into /tmp/cerebro-*/ (the non-Bash channel for
+# landing large plan bodies fast, ingested by `cerebro plan --from-file`), no
+# Task delegation, no unrestricted Bash/git/gh. The scope is the shared
+# /tmp/cerebro-*/ namespace (the agent file is static across sessions so it
+# can be prompt-cached); the orchestrator writes to /tmp/cerebro-<its-own-
+# session-id>/ so concurrent sessions stay disjoint. Body is the static
+# system-prompt.md only.
+claude_orchestrator_agent_file() {
+  cat <<'EOF'
+---
+name: cerebro-orchestrator
+description: cerebro orchestrator -- drives the plan/execute/review loop via cerebro subcommands
+tools: Read, Grep, Glob, WebSearch, WebFetch, Bash(cerebro:*), Write(/tmp/cerebro-*/**), Edit(/tmp/cerebro-*/**), mcp__playwright__*
+---
+EOF
+  cat "$(cerebro_payloads_dir)/system-prompt.md"
+}
+
 # observer_agent_file -- the opencode agent markdown for a `cerebro --observe`
 # session. Same read-only clamp as the orchestrator, but bash is narrowed to
 # observe/steer/restart + read-only status commands. Body is the static

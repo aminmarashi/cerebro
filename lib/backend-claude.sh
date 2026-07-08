@@ -126,17 +126,25 @@ backend_claude_answerable_provider() {
 }
 
 # backend_claude_materialise_extras -- write the claude-only home files: the
-# UserPromptSubmit hook and the .claude/settings.local.json that registers it.
-# Called after the shared materialise_home (which writes the opencode tree the
-# reviewer needs regardless of backend).
+# UserPromptSubmit hook, the .claude/settings.local.json that registers it, the
+# CLAUDE.md bootstrap template, and the cerebro-orchestrator main-thread agent
+# under .claude/agents/ (used by `cerebro acp` to pin the restricted
+# orchestrator through claude-agent-acp's `agent` config option). Called after
+# the shared materialise_home (which writes the opencode tree the reviewer
+# needs regardless of backend).
 backend_claude_materialise_extras() {
-  mkdir -p "$CEREBRO_HOME/.claude"
+  mkdir -p "$CEREBRO_HOME/.claude" "$CEREBRO_HOME/.claude/agents"
   write_if_changed "$CEREBRO_HOME/hook.sh" "$(cerebro_hook_script)"
   chmod +x "$CEREBRO_HOME/hook.sh"
   local settings; settings="$(cerebro_settings_json "$CEREBRO_HOME/hook.sh")"
   write_if_changed "$CEREBRO_HOME/.claude/settings.local.json" "$settings"
   # The claude backend still ships a CLAUDE.md bootstrap template for new repos.
   write_if_missing "$CEREBRO_HOME/templates/CLAUDE.md" "$(cerebro_default_claude_md)"
+  # The ACP-path orchestrator agent. The TUI path does not use it (it pins via
+  # --allowedTools on the CLI), but writing it here keeps the agent on disk for
+  # `cerebro acp` and any direct `claude --agent cerebro-orchestrator` use.
+  write_if_changed "$CEREBRO_HOME/.claude/agents/cerebro-orchestrator.md" \
+    "$(claude_orchestrator_agent_file)"
 }
 
 # backend_claude_launch_orchestrator <sess_dir> <prompt-file> -- exec the
@@ -297,4 +305,56 @@ backend_claude_pair_cleanup() {
   (( $1 )) || return 0
   [[ -n "${PAIR_FIFO:-}" ]] && rm -f "$PAIR_FIFO"
   [[ -n "${PAIR_PGID:-}" ]] && rm -f "$PAIR_PGID"
+}
+
+# ----- ACP (Agent Client Protocol) ------------------------------------------
+# `cerebro acp` is a thin proxy: per ACP session it mints a cerebro session,
+# spawns a per-session claude-agent-acp child (@agentclientprotocol/claude-
+# agent-acp on the Claude Agent SDK), and relays JSON-RPC with sessionId remap.
+# The restricted cerebro-orchestrator agent is pinned through claude-agent-acp's
+# `agent` config option: claude-agent-acp surfaces custom main-thread agents
+# discovered from the SESSION cwd's .claude/agents/ (verified), so acp-mint
+# writes a cerebro-owned per-session project dir
+# ($CEREBRO_HOME/acp/<sid>/.claude/agents/cerebro-orchestrator.md) that the
+# proxy uses as the session cwd, with the user's repo passed as an ACP
+# additional_directory (no repo pollution). cerebro-orchestrator then appears
+# in the agent picker and the proxy forces it via session/set_config_option
+# after new_session; that calls the SDK's applyFlagSettings({agent:...}) -- the
+# same path as `claude --agent` -- so the agent file's `tools:` is
+# hard-enforced. CLAUDE_CONFIG_DIR points at cerebro's isolated .claude so the
+# user's own ~/.claude hooks/settings don't interfere; the orchestrator agent
+# itself is read from the session-cwd project dir.
+
+# backend_claude_acp_child_spec -- emit the JSON spec acp_server.py consumes
+# to spawn + pin the upstream claude ACP child for one session:
+#   {argv, pin:{config_id,value}, env}
+# argv prefers a globally installed `claude-agent-acp`, falling back to
+# `npx -y @agentclientprotocol/claude-agent-acp` (zero-touch, cached by npx
+# after first use). pin forces the `agent` config option to cerebro-orchestrator.
+# env layers CLAUDE_CONFIG_DIR onto the child; when CEREBRO_CLAUDE_BASE_URL is
+# set it also exports the Anthropic gateway env (mirroring
+# backend_claude_endpoint_env, including pinning ANTHROPIC_MODEL so the gateway
+# serves the configured model) and nulls ANTHROPIC_API_KEY (the proxy unsets a
+# null env value). The proxy adds CEREBRO_SESSION_ID / CEREBRO_SESSION_DIR /
+# CEREBRO_HOME itself.
+backend_claude_acp_child_spec() {
+  local argv_bin
+  if command -v claude-agent-acp >/dev/null 2>&1; then
+    argv_bin='["claude-agent-acp"]'
+  else
+    argv_bin='["npx","-y","@agentclientprotocol/claude-agent-acp"]'
+  fi
+  local env_json='{}'
+  if [[ -n "$CEREBRO_CLAUDE_BASE_URL" ]]; then
+    env_json="$(jq -n --arg base "$CEREBRO_CLAUDE_BASE_URL" \
+        --arg tok "${CEREBRO_CLAUDE_AUTH_TOKEN:-ollama}" \
+        --arg model "${CEREBRO_MODEL:-}" \
+        '{ANTHROPIC_BASE_URL:$base, ANTHROPIC_AUTH_TOKEN:$tok,
+          ANTHROPIC_MODEL:$model, ANTHROPIC_DEFAULT_HAIKU_MODEL:$model,
+          ANTHROPIC_API_KEY:null}')"
+  fi
+  jq -n --argjson argv "$argv_bin" --arg cfg "agent" --arg val "cerebro-orchestrator" \
+        --arg ccd "$CEREBRO_HOME/.claude" --argjson env "$env_json" \
+    '{argv:$argv, pin:{config_id:$cfg, value:$val},
+      env:($env + {CLAUDE_CONFIG_DIR:$ccd})}'
 }

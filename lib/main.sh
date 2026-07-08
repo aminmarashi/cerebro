@@ -23,6 +23,12 @@ main() {
     apply-review) shift; cmd_apply_review "$@" ;;
     verify) shift; cmd_verify "$@" ;;
     doc-write) shift; cmd_doc_write "$@" ;;
+    # ACP (Agent Client Protocol) front-end for editors (Zed, ...). `acp` is the
+    # external entry point; acp-mint / acp-set-foreign are internal, called by
+    # the python ACP server over `cerebro <name>`.
+    acp) shift; cmd_acp "$@" ;;
+    acp-mint) shift; cmd_acp_mint "$@" ;;
+    acp-set-foreign) shift; cmd_acp_set_foreign "$@" ;;
     answer) shift; cmd_answer "$@" ;;
     models)  shift; cmd_models "$@" ;;
     steer) shift; cmd_steer "$@" ;;

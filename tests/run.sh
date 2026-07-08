@@ -18,6 +18,17 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 export CEREBRO_HOME="$WORKDIR/cerebro-home"
 export CEREBRO_SESSION_ID="test-session"
+# Hermeticize the suite: clear the user's backend / model / endpoint env so the
+# tests run against cerebro's compiled-in defaults (opencode backends; the
+# github-copilot model defaults config.sh pins). The opencode-stub tests below
+# assume the opencode backend, and several unit checks assert the exact default
+# model names -- a user-exported CEREBRO_BACKEND=claude / CEREBRO_MODEL=... would
+# otherwise leak in, spawn real `claude` agents (hangs), and break those
+# assertions. Per-test cases that need claude set CEREBRO_REVIEW_BACKEND=claude
+# (and a claude stub) locally.
+unset CEREBRO_BACKEND CEREBRO_REVIEW_BACKEND \
+      CEREBRO_MODEL CEREBRO_REVIEW_MODEL \
+      CEREBRO_CLAUDE_BASE_URL CEREBRO_CLAUDE_AUTH_TOKEN
 mkdir -p "$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID/plans" \
          "$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID/children"
 : > "$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID/transcript.jsonl"
@@ -2001,7 +2012,7 @@ default_pin="$(CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 bash -c '
   printf "%s" "$ANTHROPIC_MODEL"' _ "$here/../lib" 2>/dev/null)" || default_rc=$?
 if [[ "$pin" == "github-copilot/gpt-5.5" \
    && "$default_pin" == "github-copilot/gemini-3.1-pro-preview" \
-   && (( default_rc == 0 )) ]]; then
+   && "$default_rc" == 0 ]]; then
   printf 'PASS  129e endpoint_env pins review + editing default; no longer dies\n'; pass=$((pass + 1))
 else
   printf 'FAIL  129e endpoint_env [pin=%s default_pin=%s rc=%d]\n' "$pin" "$default_pin" "$default_rc"; fail=$((fail + 1))
@@ -3179,6 +3190,37 @@ if [[ "$imp_prompt" == *"HILL CLIMB"* ]] && [[ "$imp_prompt" == *"recur"* ]]; th
 else
   printf 'FAIL  176  cerebro_improve_prompt missing meta-skill content\n'; fail=$((fail + 1))
   failures+=("176 cerebro_improve_prompt content")
+fi
+
+# ========================================================================
+# 177. ACP relay: `cerebro acp` is a thin JSON-RPC proxy between an ACP editor
+# and a per-session upstream child. tests/acp/relay_test.py is the editor side;
+# it spawns acp_server.py with a stub upstream and asserts sessionId remap, the
+# cwd remap (user repo -> additional_directory), the forced agent/mode pin, the
+# session/update relay, and metadata foreign-id recording. Requires the
+# agent-client-protocol Python SDK (cerebro's one third-party dep) on a
+# Python >= 3.10; skipped when absent.
+# ========================================================================
+ACP_PY=""
+for _cand in /opt/homebrew/bin/python3 python3 python3.13 python3.12 python3.11 python3.10; do
+  _p="$(command -v "$_cand" 2>/dev/null)" || continue
+  [[ -x "$_p" ]] || continue
+  if "$_p" -c 'import sys,acp; sys.exit(0 if sys.version_info[:2]>=(3,10) else 1)' 2>/dev/null; then
+    ACP_PY="$_p"; break
+  fi
+done
+if [[ -n "$ACP_PY" ]]; then
+  acp_out="$("$ACP_PY" "$here/acp/relay_test.py" "$here/.." 2>"$WORKDIR/stderr")"
+  acp_rc=$?
+  acp_err="$(cat "$WORKDIR/stderr")"
+  if [[ $acp_rc -eq 0 && "$acp_out" == *"all checks passed"* ]]; then
+    printf 'PASS  177  ACP relay: remap + pin + session/update + metadata\n'; pass=$((pass + 1))
+  else
+    printf 'FAIL  177  ACP relay [rc=%d out=%s err=%s]\n' "$acp_rc" "$acp_out" "$acp_err"; fail=$((fail + 1))
+    failures+=("177 ACP relay :: rc=$acp_rc out=$acp_out err=$acp_err")
+  fi
+else
+  printf 'SKIP  177  ACP relay (agent-client-protocol SDK / Python >=3.10 unavailable)\n'
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

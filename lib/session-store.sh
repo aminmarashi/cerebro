@@ -25,6 +25,17 @@ touch_metadata() {
     > "$tmp" 2>/dev/null && mv "$tmp" "$sess_dir/metadata.json" || rm -f "$tmp"
 }
 
+# set_metadata_foreign <sess-dir> <foreign-id> -- record the provider-assigned
+# conversation id for a session (used by the ACP proxy to reopen the same
+# upstream conversation on session/load + session/resume). Idempotent.
+set_metadata_foreign() {
+  local sess_dir="$1" foreign="$2" tmp
+  [[ -f "$sess_dir/metadata.json" ]] || return 0
+  tmp="$(mktemp)" || return 0
+  jq --arg f "$foreign" '.foreign_session_id = $f' "$sess_dir/metadata.json" \
+    > "$tmp" 2>/dev/null && mv "$tmp" "$sess_dir/metadata.json" || rm -f "$tmp"
+}
+
 # session_backend <sess-dir> -- echo the recorded backend for a session, or
 # the default if the field is missing (older sessions). Never errors.
 session_backend() {

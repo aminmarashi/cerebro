@@ -4,3 +4,7 @@
 # Editor noise
 *.swp
 *~
+
+# Python build / runtime artifacts
+__pycache__/
+.lock

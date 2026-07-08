@@ -270,3 +270,32 @@ backend_opencode_pair_cleanup() {
   fi
   [[ -n "${PAIR_FIFO:-}" ]] && rm -f "$PAIR_FIFO"
 }
+
+# ----- ACP (Agent Client Protocol) ------------------------------------------
+# `cerebro acp` is a thin proxy: per ACP session it mints a cerebro session,
+# spawns a per-session `opencode acp` child, and relays JSON-RPC with sessionId
+# remap. The restricted cerebro-orchestrator agent is pinned through opencode's
+# `mode` Session Mode config option: opencode acp discovers agents from the
+# SESSION cwd's .opencode/agent/ (verified), so acp-mint writes a cerebro-owned
+# per-session project dir ($CEREBRO_HOME/acp/<sid>/.opencode/agent/cerebro-
+# orchestrator.md) that the proxy uses as the session cwd, with the user's repo
+# passed as an ACP additional_directory (no repo pollution). cerebro-
+# orchestrator then appears among the mode option values and the proxy forces it
+# via session/set_config_option after new_session. OPENCODE_CONFIG_DIR is
+# deliberately NOT set: the project .opencode carries cerebro's opencode.json +
+# the orchestrator agent, and opencode reads the user's global ~/.config/opencode
+# (auth/providers) underneath -- so credentials keep working without layering
+# cerebro's other agents (execute/reviewer/...) into the ACP mode picker.
+
+# backend_opencode_acp_child_spec -- emit the JSON spec acp_server.py consumes
+# to spawn + pin the upstream opencode ACP child for one session:
+#   {argv, pin:{config_id,value}, env}
+# argv is the full command line; pin is the set_config_option call that forces
+# the restricted orchestrator; env is the EXTRA env to set on the child (the
+# proxy adds CEREBRO_SESSION_ID / CEREBRO_SESSION_DIR / CEREBRO_HOME itself).
+# opencode needs no extra env here -- it finds the orchestrator agent in the
+# session-cwd project dir and auth in the user's global config.
+backend_opencode_acp_child_spec() {
+  jq -n --arg cfg "mode" --arg val "cerebro-orchestrator" \
+    '{argv:["opencode","acp"], pin:{config_id:$cfg, value:$val}, env:{}}'
+}

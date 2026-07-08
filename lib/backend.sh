@@ -155,6 +155,15 @@ backend_pair_cleanup() {
   "backend_$(current_backend)_pair_cleanup" "$@"
 }
 
+# backend_acp_child_spec -- emit the JSON spec {argv, pin:{config_id,value},
+# env} that acp_server.py consumes to spawn + pin the upstream ACP child for one
+# session under the active backend. See backend_<name>_acp_child_spec for the
+# per-backend pin mechanism (opencode: `mode` config option; claude: `agent`
+# config option). Echoed on stdout as one JSON object.
+backend_acp_child_spec() {
+  "backend_$(current_backend)_acp_child_spec" "$@"
+}
+
 # The pair module (pair.sh) routes its backend-specific entry points through
 # these wrappers so the command files stay backend-agnostic.
 pair_begin()   { backend_pair_begin "$@"; }

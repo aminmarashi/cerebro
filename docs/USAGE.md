@@ -135,6 +135,83 @@ When the child finishes, your steering is reported back and the
 orchestrator folds it in automatically — updating the session spec and
 revising affected plans — then tells you what changed.
 
+## Drive it from your editor (ACP)
+
+`cerebro acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com),
+so any ACP-aware editor — Zed, and anything else that implements it — can drive
+cerebro's orchestrator directly, turn by turn, with the **full** agent
+experience: images, @-mentions / embedded context, thinking, structured
+clarifying questions, terminals, MCP servers, permission prompts, edit review,
+model / mode / effort pickers, and usage — whatever the upstream agent CLI
+exposes. cerebro does not re-implement any of it.
+
+cerebro is a **thin proxy** (on the official `agent-client-protocol` Python
+SDK). For each editor session it:
+
+1. **mints a cerebro session** (the same durable session `cerebro --resume`
+   reopens), and a cerebro-owned ACP project dir that carries the restricted
+   `cerebro-orchestrator` agent;
+2. **spawns a per-session upstream ACP child** — `opencode acp` (opencode
+   backend) or `claude-agent-acp` (claude backend) — with `CEREBRO_SESSION_ID`
+   injected, so every `cerebro` subcommand the orchestrator spawns binds to that
+   session;
+3. **pins the restricted agent** — forcing the `cerebro-orchestrator` mode
+   (opencode) or `agent` (claude) config option — so the orchestrator's
+   read-only + `Bash(cerebro:*)` restriction is harness-enforced, never just
+   promised, and every edit/git/PR still routes through spawned children in
+   worktrees;
+4. **relays JSON-RPC unchanged** with sessionId remap (the editor sees cerebro
+   session ids; the child sees its own), and records the upstream conversation
+   id in cerebro metadata so `session/load` + `session/resume` reopen the same
+   upstream conversation.
+
+Your repo is never written to from the ACP path: it is passed to the child as an
+ACP `additional_directory`, and the child's session cwd is the cerebro-owned
+project dir.
+
+### Register it in Zed
+
+Add a custom agent server to your Zed `settings.json`:
+
+```jsonc
+"agent_servers": {
+  "Cerebro": { "type": "custom", "command": "cerebro", "args": ["acp"] }
+}
+```
+
+Zed launches `cerebro acp` once (long-lived); each thread's cwd comes from the
+editor. Open a Cerebro thread in a repo, send "draft a plan first" → "go", and
+the `cerebro execute` child binds to the session (visible in `cerebro list`),
+opens its PR, and reports back through the editor. Restart Zed and resume the
+thread — the upstream conversation reopens.
+
+### Backends and dependencies
+
+* **opencode (default):** uses `opencode acp`. No extra deps beyond cerebro's
+  normal ones.
+* **claude:** uses `@agentclientprotocol/claude-agent-acp` via `npx`, which
+  needs **Node ≥ 22** + `npx` on PATH. Set `CEREBRO_BACKEND=claude` (and, for a
+  gateway, `CEREBRO_CLAUDE_BASE_URL`).
+
+ACP needs **Python ≥ 3.10** plus the `agent-client-protocol` package. `cerebro
+acp` prefers Homebrew's `python3` (`/opt/homebrew/bin/python3`) — macOS system
+python3 is 3.9, too old — and auto-installs the SDK to your user site
+(`pip install --user --break-system-packages`) on first run if it's missing.
+Install them yourself if you prefer:
+
+```bash
+brew install python
+/opt/homebrew/bin/python3 -m pip install --user --break-system-packages agent-client-protocol
+```
+
+### Scope
+
+ACP is **editor-driven and turn-by-turn**. The interactive **pair / observe /
+watch-and-steer** features stay TUI-only (`cerebro` / `cerebro --observe`): the
+ACP orchestrator is a sequence of per-turn upstream sessions, not a persistent
+pairable process. `cerebro list` shows ACP-created sessions and `cerebro
+--resume <id>` works on them like any other.
+
 ## Resume and interrupted work
 
 Sessions are durable. `cerebro --resume <id>` (or the picker) drops
