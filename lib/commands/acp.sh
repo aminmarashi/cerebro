@@ -66,6 +66,19 @@ cmd_acp() {
   acp_require_python_deps
   materialise_home
   export CEREBRO_ACP_CHILD_SPEC="$(backend_acp_child_spec)"
+  # config.sh sets the CEREBRO_* vars as plain shell variables (only
+  # OPENCODE_CONFIG_DIR is exported there). cmd_launch exports CEREBRO_HOME
+  # before spawning the orchestrator; cmd_acp must do the same before exec'ing
+  # the python server, which reads CEREBRO_HOME directly. The server also
+  # copies its own env into every upstream child (and the orchestrator's
+  # `cerebro <subcmd>` children inherit that env), so export the backend /
+  # model / endpoint vars too -- otherwise a claude-backend ACP session would
+  # spawn `cerebro execute` children that default back to opencode and fail to
+  # bind the session, and a user-overridden CEREBRO_HOME would be lost.
+  export CEREBRO_HOME \
+         CEREBRO_BACKEND CEREBRO_REVIEW_BACKEND \
+         CEREBRO_MODEL CEREBRO_DEFAULT_MODEL CEREBRO_REVIEW_MODEL \
+         CEREBRO_CLAUDE_BASE_URL CEREBRO_CLAUDE_AUTH_TOKEN
   exec "$CEREBRO_ACP_PYTHON" "$CEREBRO_LIB_DIR/python/acp_server.py"
 }
 
