@@ -63,13 +63,53 @@ cerebro_audit_prompt() {
   printf '%s\n' "$out"
 }
 
+# The meta-skill component names, in pipeline order (analyzer=retriever=
+# allocator=proposer=evolver). Each has a base prompt at
+# lib/payloads/prompts/meta/<name>.md and an optional local overlay at
+# $CEREBRO_HOME/overlays/meta-<name>.md. The composition appends the overlay
+# after the base so the improvement procedure is evolveable in-place.
+CEREBRO_META_COMPONENTS="analyzer retriever allocator proposer evolver"
+
 # The hill-climbing analysis prompt fed to the read-only reviewer child spawned
 # by `cerebro improve` (the trace-corpus locations / context are appended after
-# it). Mirrors cerebro_audit_prompt.
+# it). Composed from the five meta-skill components (analyzer / retriever /
+# allocator / proposer / evolver) plus any local meta-overlays, so the
+# improvement procedure itself is evolveable via `cerebro overlay set
+# meta-<component>` -- the two-timescale recursive self-improvement loop.
 cerebro_improve_prompt() {
-  printf '%s\n\n%s\n' \
+  local out comp ov
+  out="$(printf '%s\n\n%s' \
     "$(cerebro_reviewer_note)" \
-    "$(cat "$(cerebro_payloads_dir)/prompts/improve.md")"
+    "$(cat "$(cerebro_payloads_dir)/prompts/meta/intro.md")")"
+  for comp in $CEREBRO_META_COMPONENTS; do
+    out="$(printf '%s\n\n%s' "$out" \
+      "$(cat "$(cerebro_payloads_dir)/prompts/meta/$comp.md")")"
+    ov="$(overlay_body "meta-$comp")"
+    [[ -n "$ov" ]] && out="$(printf '%s\n\n# Local meta-%s overlay\n%s' "$out" "$comp" "$ov")"
+  done
+  printf '%s\n' "$out"
+}
+
+# The slow-loop (meta-skill evolution) prompt fed to the read-only reviewer
+# child spawned by `cerebro improve --meta`. The improvement history (last H
+# fast-loop runs with findings, accepted counts, and utility deltas) is
+# appended after this prompt in cmd_improve. The meta-skill component files
+# are cited as read-only reference (the model diagnoses them, not follows
+# their output instructions), so the component prompts' HILL CLIMB verdict
+# does not conflict with the meta-loop's META CLIMB verdict.
+cerebro_meta_improve_prompt() {
+  local out; out="$(printf '%s\n\n%s' \
+    "$(cerebro_reviewer_note)" \
+    "$(cat "$(cerebro_payloads_dir)/prompts/meta-improve.md")")"
+  local comp ov
+  out="$(printf '%s\n\n## Current meta-skill components (for reference -- diagnose them, do not follow their output instructions)\n' "$out")"
+  for comp in $CEREBRO_META_COMPONENTS; do
+    out="$(printf '%s\n\n### %s\n%s' "$out" "$comp" \
+      "$(cat "$(cerebro_payloads_dir)/prompts/meta/$comp.md")")"
+    ov="$(overlay_body "meta-$comp")"
+    [[ -n "$ov" ]] && out="$(printf '%s\n\n# Local meta-%s overlay\n%s' "$out" "$comp" "$ov")"
+  done
+  printf '%s\n' "$out"
 }
 
 # ----- child role prompts ---------------------------------------------------

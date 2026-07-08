@@ -1,0 +1,33 @@
+## Evolver -- routing and apply-target policy
+
+The concrete LOCAL apply target for each finding, so ANY user applies it
+offline with no GitHub:
+
+  - orchestrator behaviour -> `cerebro learn-set` (a durable preference)
+    or `cerebro overlay set system` (a broader orchestrator addition)
+  - a child role prompt (execute / apply-review / doc-write) ->
+    `cerebro overlay set <role>`
+  - the codex grader (audit or review) -> `cerebro overlay set grader`
+  - the improvement procedure itself (analyzer / retriever / allocator /
+    proposer / evolver) -> `cerebro overlay set meta-<component>`
+  - (maintainers only, optional) the SAME change upstreamed to the
+    shipped payload via a normal reviewed PR -- name the real file too.
+
+The harness surface list (ILLUSTRATIVE, not exhaustive -- GREP the repo
+for the real definition site):
+  - Orchestrator brain: `lib/payloads/system-prompt.md`.
+  - Child role prompts: `lib/payloads/prompts/{execute,apply-review,doc-write}.md`
+    plus the shared `lib/payloads/prompts/noninteractive-note.md`.
+  - Graders: the AUDIT grader at `lib/payloads/prompts/audit.md`; the REVIEW
+    grader is INLINE in `lib/commands/review.sh` (the `codex_prompt=` block).
+  - Improvement procedure: `lib/payloads/prompts/meta/{analyzer,retriever,allocator,proposer,evolver}.md`
+  - Tool surfaces: `lib/commands/session.sh`; `child_allowed_tools`
+    (`lib/payloads.sh`); read-only bridges in `lib/commands/bridge.sh`
+    (read/grep/ls) and `lib/commands/git.sh` / `lib/commands/gh.sh`.
+  - Observer overlay: `lib/payloads/observe-mode.md`.
+  - Already-applied state to avoid re-proposing: `learnings.md`,
+    `overlays/*.md` (Read these and skip anything already addressed).
+
+End with, as the VERY LAST line, exactly `HILL CLIMB: ISSUES FOUND` if you
+filed at least one recurring issue, otherwise exactly `HILL CLIMB: NO
+CHANGES RECOMMENDED`.

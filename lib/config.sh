@@ -70,3 +70,14 @@ export OPENCODE_CONFIG_DIR="$CEREBRO_HOME/.opencode"
 # Max chars in a single harness overlay file. Larger than learnings' cap since
 # overlays aren't all carried in one system message, but still bounded.
 CEREBRO_OVERLAY_CAP="${CEREBRO_OVERLAY_CAP:-4000}"
+
+# ----- two-timescale self-improvement (MetaSkill-Evolve) --------------------
+# The fast loop (cerebro improve) evolves task-level overlays; the slow loop
+# (cerebro improve --meta) evolves the meta-skill (the improvement procedure
+# itself) every H fast-loop runs. Frontier-selection weights balance task
+# utility, meta-productivity, and visitation novelty when choosing which
+# past improvement state to build on.
+CEREBRO_META_HORIZON="${CEREBRO_META_HORIZON:-2}"
+CEREBRO_IMPROVE_ETA_1="${CEREBRO_IMPROVE_ETA_1:-1.0}"   # utility U
+CEREBRO_IMPROVE_ETA_2="${CEREBRO_IMPROVE_ETA_2:-0.5}"   # meta-productivity P
+CEREBRO_IMPROVE_ETA_3="${CEREBRO_IMPROVE_ETA_3:-0.25}"  # novelty N

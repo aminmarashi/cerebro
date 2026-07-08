@@ -16,7 +16,8 @@
 #   grader        -> appended to the codex audit AND review grader prompts
 
 # The valid overlay targets, shared by the validation paths below.
-CEREBRO_OVERLAY_TARGETS="system execute apply-review doc-write grader"
+CEREBRO_OVERLAY_TARGETS="system execute apply-review doc-write grader \
+  meta-analyzer meta-retriever meta-allocator meta-proposer meta-evolver"
 
 # overlay_target_ok <target> -- succeed when <target> is a known overlay.
 overlay_target_ok() {
@@ -75,9 +76,9 @@ cmd_overlay_show() {
     f="$(overlay_file "$t")"
     if [[ -s "$f" ]]; then
       n=$(wc -c < "$f" | tr -d ' ')
-      printf '  %-12s present (%s chars)\n' "$t" "$n"
+      printf '  %-16s present (%s chars)\n' "$t" "$n"
     else
-      printf '  %-12s absent\n' "$t"
+      printf '  %-16s absent\n' "$t"
     fi
   done
 }

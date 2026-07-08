@@ -3125,13 +3125,14 @@ run_case 175 "improve no repo arg rejected" 1 -- "$CEREBRO_BIN" improve
 STDERR_CONTAINS="must be absolute" \
 run_case 175b "improve non-absolute repo rejected" 1 -- "$CEREBRO_BIN" improve relative/path
 
-# --- 176. cerebro_improve_prompt loads prompts/improve.md after the readonly
-# note (no phantom path), and includes a HILL CLIMB instruction. ---
+# --- 176. cerebro_improve_prompt composes the five meta-skill components
+# (analyzer/retriever/allocator/proposer/evolver) after the readonly note,
+# and includes a HILL CLIMB instruction. ---
 imp_prompt="$(ov_fn cerebro_improve_prompt 2>/dev/null)"
 if [[ "$imp_prompt" == *"HILL CLIMB"* ]] && [[ "$imp_prompt" == *"recur"* ]]; then
-  printf 'PASS  176  cerebro_improve_prompt loads improve.md\n'; pass=$((pass + 1))
+  printf 'PASS  176  cerebro_improve_prompt composes meta-skill components\n'; pass=$((pass + 1))
 else
-  printf 'FAIL  176  cerebro_improve_prompt missing improve.md content\n'; fail=$((fail + 1))
+  printf 'FAIL  176  cerebro_improve_prompt missing meta-skill content\n'; fail=$((fail + 1))
   failures+=("176 cerebro_improve_prompt content")
 fi
 
