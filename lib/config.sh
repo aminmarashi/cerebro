@@ -18,11 +18,18 @@ CEREBRO_BACKEND="${CEREBRO_BACKEND:-opencode}"
 CEREBRO_DEFAULT_MODEL="github-copilot/gemini-3.1-pro-preview"
 CEREBRO_MODEL="${CEREBRO_MODEL:-$CEREBRO_DEFAULT_MODEL}"
 # The model the read-only reviewer/auditor (cerebro review / cerebro audit /
-# cerebro verify / cerebro improve) runs on -- a deliberately DIFFERENT model
-# from the implementer, so the review is a genuinely independent pair of eyes.
-# GPT-5.5 by default. The reviewer runs under CEREBRO_REVIEW_BACKEND (opencode
-# by default); when that is opencode it needs opencode on PATH even if the
-# editing children run under claude.
+# cerebro verify / cerebro improve) runs on -- a SUGGESTED different model
+# from the implementer, so the review can be a genuinely independent pair of
+# eyes when a different model is configured. It is a suggestion, not a rule:
+# leaving it equal to CEREBRO_MODEL is allowed (the reviewer's read-only
+# confinement and fresh context still give it independence). Any subcommand
+# can override either default per call with --model <provider/model>; the
+# orchestrator discovers available models and their capabilities (e.g. vision
+# for screenshot verification) via `cerebro models`, which reads the user's
+# catalog at $CEREBRO_HOME/models-config.json. GPT-5.5 by default. The
+# reviewer runs under CEREBRO_REVIEW_BACKEND (opencode by default); when that
+# is opencode it needs opencode on PATH even if the editing children run
+# under claude.
 CEREBRO_REVIEW_MODEL="${CEREBRO_REVIEW_MODEL:-github-copilot/gpt-5.5}"
 # The backend the read-only reviewer (review / audit / verify / improve) runs
 # under, independent of CEREBRO_BACKEND so the reviewer can use a different CLI

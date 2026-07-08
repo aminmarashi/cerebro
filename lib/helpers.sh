@@ -166,7 +166,12 @@ bash limited to `cerebro ...` (no edit, no write, no subagent delegation).
 Every git/gh action and every file edit happens inside a short-lived
 sub-agent that cerebro spawns; the orchestrator itself can't touch repos
 directly. The read-only reviewer runs under CEREBRO_REVIEW_BACKEND (opencode
-by default) on an independent model, regardless of the editing backend.
+by default) on a suggested-different model (CEREBRO_REVIEW_MODEL),
+regardless of the editing backend; any subcommand's --model flag overrides
+the default per call, and `cerebro models` lists the user's model catalog
+($CEREBRO_HOME/models-config.json) with capability tags so the
+orchestrator can pick a model per task (e.g. a vision-capable model for
+screenshot verification).
 
 Notes:
   * Interactive-only. cerebro refuses to run under a non-terminal parent

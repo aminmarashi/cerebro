@@ -74,7 +74,7 @@ improve_count_findings() {
 # Returns 0 on success with findings in $out_path; non-zero on failure.
 improve_run_reviewer() {
   local repo="$1" prompt="$2" agent="$3" prior="$4"
-  local child_log="$5" out_path="$6" label="$7"
+  local child_log="$5" out_path="$6" label="$7" model="${8:-}"
   local store_file; store_file="$(child_sessions_file)"
   local ckey; ckey="$(child_key "$repo" "$label" "$label")"
 
@@ -89,7 +89,7 @@ improve_run_reviewer() {
 
   child_store_begin "$ckey" "$(review_backend)" "$label" "$repo" "$label" "$child_log" "${prior:+preserve-id}"
   review_child_run 0 "$repo" "$prompt" "$agent" "$prior" \
-    "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+    "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "${model:-$CEREBRO_REVIEW_MODEL}"
   rc=$?
 
   # Stale fallback: a resume the model no longer recognizes fails before any
@@ -100,7 +100,7 @@ improve_run_reviewer() {
     : > "$id_capture"
     child_store_begin "$ckey" "$(review_backend)" "$label" "$repo" "$label" "$child_log"
     review_child_run 0 "$repo" "$prompt" "$agent" "" \
-      "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+      "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "${model:-$CEREBRO_REVIEW_MODEL}"
     rc=$?
   fi
 
@@ -139,15 +139,17 @@ cmd_improve() {
   local repo="${1:-}"; shift || true
   local context=""
   local force_meta=0
+  local model=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --context) shift; context="${1:-}"; shift || true ;;
       --meta) force_meta=1; shift ;;
+      --model) shift; model="${1:-}"; shift || true ;;
       *) die "improve: unknown arg: $1" ;;
     esac
   done
   [[ -n "$repo" ]] \
-    || die "usage: cerebro improve <cerebro-repo-abs-path> [--context \"<focus>\"] [--meta]"
+    || die "usage: cerebro improve <cerebro-repo-abs-path> [--context \"<focus>\"] [--meta] [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "improve: repo path must be absolute: $repo"
   [[ -d "$repo" ]] || die "improve: repo not a directory: $repo"
 
@@ -234,7 +236,7 @@ $context
   fi
 
   if improve_run_reviewer "$repo" "$improve_prompt" "$agent" "$fast_prior" \
-      "$child_log" "$out_path" improve; then
+      "$child_log" "$out_path" improve "$model"; then
     log_event "improve_written" "$out_path"
     results+=("$out_path")
 
@@ -315,7 +317,7 @@ $context
     fi
 
     if improve_run_reviewer "$repo" "$meta_prompt" "$agent" "$meta_prior" \
-        "$meta_child_log" "$meta_out_path" meta-improve; then
+        "$meta_child_log" "$meta_out_path" meta-improve "$model"; then
       log_event "meta_improve_written" "$meta_out_path"
       results+=("$meta_out_path")
 

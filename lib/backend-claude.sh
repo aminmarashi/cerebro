@@ -19,16 +19,14 @@
 # endpoint. <model> (defaults to CEREBRO_MODEL) is the model THIS run will use:
 # editing children and the orchestrator pass CEREBRO_MODEL; a reviewer child
 # (CEREBRO_REVIEW_BACKEND=claude) passes CEREBRO_REVIEW_MODEL so the gateway
-# serves the review model, not the editing model. It must differ from the
-# shipped editing default (CEREBRO_DEFAULT_MODEL) so a misconfigured run fails
-# early instead of at the provider. Idempotent; a no-op when
-# CEREBRO_CLAUDE_BASE_URL is unset (the default subscription path, unchanged --
-# the --model flag alone selects the model).
+# serves the review model, not the editing model. A subcommand's --model flag
+# overrides either default per call, so the gateway always serves the model the
+# caller selected. Idempotent; a no-op when CEREBRO_CLAUDE_BASE_URL is unset
+# (the default subscription path, unchanged -- the --model flag alone selects
+# the model).
 backend_claude_endpoint_env() {
   [[ -n "$CEREBRO_CLAUDE_BASE_URL" ]] || return 0
   local model="${1:-$CEREBRO_MODEL}"
-  [[ "$model" != "$CEREBRO_DEFAULT_MODEL" ]] \
-    || die "CEREBRO_CLAUDE_BASE_URL is set but the effective model is still the shipped default ($CEREBRO_DEFAULT_MODEL); set the relevant CEREBRO_*MODEL to a model the endpoint serves"
   export ANTHROPIC_BASE_URL="$CEREBRO_CLAUDE_BASE_URL"
   export ANTHROPIC_AUTH_TOKEN="${CEREBRO_CLAUDE_AUTH_TOKEN:-ollama}"
   export ANTHROPIC_MODEL="$model"

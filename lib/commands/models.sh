@@ -1,0 +1,65 @@
+# cerebro lib: commands/models
+# subcommand: models (list the user's model catalog)
+# Sourced by bin/cerebro; not meant to be executed directly.
+
+# ----- subcommand: cerebro models [--json] ----------------------------------
+# Prints the model catalog the user maintains at
+# $CEREBRO_HOME/models-config.json so the orchestrator (and the user) can
+# discover which models are available, their capability tags, and a free-text
+# description of their fit -- then pick a model per task via the subcommands'
+# --model flag. The catalog is a JSON object:
+#   { "models": [ { "id": "<provider/model>",
+#                    "capabilities": ["vision","tools","thinking","audio"],
+#                    "description": "<free text>" }, ... ] }
+# `id` is the exact provider/model string the opencode/claude `--model` flag
+# expects (same shape as CEREBRO_MODEL). `capabilities` is an open set of
+# present tags; "vision" (multimodal image input) is the one that matters for
+# screenshot/browser verification -- a model without it cannot interpret
+# Playwright screenshots, so the orchestrator routes visual verification to a
+# vision-capable model from this catalog. `description` is free text for
+# judgement the orchestrator reasons about (context window, reasoning depth,
+# cost, etc.).
+#
+# A missing/unreadable catalog is NOT a failure: it prints a one-line note (or
+# an empty JSON array with --json) so the orchestrator knows there is nothing
+# to choose from and the subcommands fall back to their env-var defaults
+# (CEREBRO_MODEL / CEREBRO_REVIEW_MODEL). This command does not require a
+# session -- it is a plain catalog lookup usable from a shell too.
+cmd_models() {
+  local json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      *) die "models: unknown arg: $1" ;;
+    esac
+  done
+  local cfg="$CEREBRO_HOME/models-config.json"
+  if [[ ! -r "$cfg" || ! -s "$cfg" ]]; then
+    if (( json )); then
+      printf '{"models":[]}\n'
+    else
+      say "no model catalog found at $cfg"
+      echo "Create one to let the orchestrator pick models per task. Schema:"
+      echo '  { "models": [ { "id": "<provider/model>", "capabilities": ["vision","tools","thinking","audio"], "description": "<free text>" } ] }'
+      echo "The subcommands' --model flag takes the catalog entry's id verbatim."
+    fi
+    return 0
+  fi
+  if ! jq -e '.models' "$cfg" >/dev/null 2>&1; then
+    warn "models: $cfg is not a valid catalog (missing top-level .models array)"
+    (( json )) && printf '{"models":[]}\n'
+    return 1
+  fi
+  if (( json )); then
+    jq -c '.models' "$cfg"
+    return 0
+  fi
+  say "model catalog ($cfg)"
+  jq -r '
+    .models[]
+    | "## " + .id
+      + "\ncapabilities: " + ((.capabilities // []) | join(", ") | if . == "" then "(none)" else . end)
+      + "\n" + (.description // "(no description)")
+      + "\n"
+  ' "$cfg"
+}

@@ -16,16 +16,17 @@ cmd_audit() {
 
   local repo="${1:-}"; shift || true
   local plan_path="${1:-}"; shift || true
-  local context="" out_name=""
+  local context="" out_name="" model=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --context) shift; context="${1:-}"; shift || true ;;
       --out) shift; out_name="${1:-}"; shift || true ;;
+      --model) shift; model="${1:-}"; shift || true ;;
       *) die "audit: unknown arg: $1" ;;
     esac
   done
   [[ -n "$repo" && -n "$plan_path" ]] \
-    || die "usage: cerebro audit <repo-abs-path> <plan-path> [--context \"<crucial context>\"] [--out <name>]"
+    || die "usage: cerebro audit <repo-abs-path> <plan-path> [--context \"<crucial context>\"] [--out <name>] [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "audit: repo path must be absolute: $repo"
   [[ -d "$repo" ]] || die "audit: repo not a directory: $repo"
   [[ -s "$plan_path" ]] || die "audit: plan file missing or empty: $plan_path"
@@ -83,17 +84,18 @@ $context
 </context>"
   fi
 
-  # Run the read-only reviewer agent on the independent review model
-  # (CEREBRO_REVIEW_MODEL). Its findings are its final message, which we capture
-  # and write to out_path; the JSON event stream is tee'd to child_log. The
-  # session id is persisted at startup so an interrupt stays resumable.
-  # The reviewer runs under CEREBRO_REVIEW_BACKEND (opencode by default).
+  # Run the read-only reviewer agent on the review model (CEREBRO_REVIEW_MODEL,
+  # overridable per call with --model). Its findings are its final message,
+  # which we capture and write to out_path; the JSON event stream is tee'd to
+  # child_log. The session id is persisted at startup so an interrupt stays
+  # resumable. The reviewer runs under CEREBRO_REVIEW_BACKEND (opencode by
+  # default).
   local agent; agent="$(review_child_agent_name audit)"
   local rc id_capture out_capture; id_capture="$(mktemp)"; out_capture="$(mktemp)"
 
   child_store_begin "$ckey" "$(review_backend)" audit "$repo" "$out_name" "$child_log" "${prior:+preserve-id}"
   review_child_run 0 "$repo" "$audit_prompt" "$agent" "$prior" \
-    "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+    "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "${model:-$CEREBRO_REVIEW_MODEL}"
   rc=$?
 
   # Stale fallback: a resume the model no longer recognizes fails before any
@@ -104,7 +106,7 @@ $context
     : > "$id_capture"
     child_store_begin "$ckey" "$(review_backend)" audit "$repo" "$out_name" "$child_log"
     review_child_run 0 "$repo" "$audit_prompt" "$agent" "" \
-      "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+      "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "${model:-$CEREBRO_REVIEW_MODEL}"
     rc=$?
   fi
 

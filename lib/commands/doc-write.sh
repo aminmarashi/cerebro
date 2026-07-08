@@ -13,6 +13,7 @@ cmd_doc_write() {
   local prompt_text=""
   local notes=""
   local pair=0
+  local model=""
   if [[ $# -gt 0 && "${1:-}" != --* ]]; then
     plan="$1"; shift
   fi
@@ -20,12 +21,13 @@ cmd_doc_write() {
     case "$1" in
       --prompt) shift; prompt_text="${1:-}"; shift || true ;;
       --notes)  shift; notes="${1:-}";       shift || true ;;
+      --model)  shift; model="${1:-}";       shift || true ;;
       --pair)   pair=1; shift ;;
       *) die "doc-write: unknown arg: $1" ;;
     esac
   done
   [[ -n "$repo" ]] \
-    || die "usage: cerebro doc-write <repo-abs-path> (<plan-path> [--notes \"...\"] | --prompt \"<text>\")"
+    || die "usage: cerebro doc-write <repo-abs-path> (<plan-path> [--notes \"...\"] | --prompt \"<text>\") [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "doc-write: repo path must be absolute: $repo"
   [[ -d "$repo" ]] || die "doc-write: repo not a directory: $repo"
   if [[ -n "$plan" && -n "$prompt_text" ]]; then
@@ -82,7 +84,7 @@ cmd_doc_write() {
   while :; do
     child_store_begin "$ckey" "$provider" doc-write "$repo" "${dw_branch:-default}" "$child_log" "${prior:+preserve-id}"
     child_run "$pair" "$repo" "$child_prompt" "$agent" "$prior" \
-      "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey"
+      "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey" "$model"
     rc=$?
     pair_cleanup "$pair"
 
@@ -95,7 +97,7 @@ cmd_doc_write() {
       (( pair )) && pair_begin doc-write "$repo" "$dw_branch" "$child_log" ""
       child_store_begin "$ckey" "$provider" doc-write "$repo" "${dw_branch:-default}" "$child_log"
       child_run "$pair" "$repo" "$child_prompt" "$agent" "" \
-        "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey"
+        "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey" "$model"
       rc=$?
       pair_cleanup "$pair"
     fi

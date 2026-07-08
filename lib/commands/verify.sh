@@ -18,17 +18,18 @@ cmd_verify() {
   build_timeout_cmd
 
   local repo="${1:-}"; shift || true
-  local plan_path="" prompt_text="" context=""
+  local plan_path="" prompt_text="" context="" model=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --plan) shift; plan_path="${1:-}"; shift || true ;;
       --prompt) shift; prompt_text="${1:-}"; shift || true ;;
       --context) shift; context="${1:-}"; shift || true ;;
+      --model) shift; model="${1:-}"; shift || true ;;
       *) die "verify: unknown arg: $1" ;;
     esac
   done
   [[ -n "$repo" ]] \
-    || die "usage: cerebro verify <repo-abs-path> (--plan <path> | --prompt <text>) [--context <text>]"
+    || die "usage: cerebro verify <repo-abs-path> (--plan <path> | --prompt \"<text>\") [--context \"<text>\"] [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "verify: repo path must be absolute: $repo"
   [[ -d "$repo" ]] || die "verify: repo not a directory: $repo"
   # Exactly one of --plan / --prompt is required.
@@ -94,8 +95,8 @@ cmd_verify() {
 
   verify_prompt+=$'\n\nWrite your verification report (what you did, what you observed, and your judgement), then end with a SINGLE final line that is exactly one of: `VERIFY: PASS` (requirements met, used for real), `VERIFY: FAIL` (list which requirements are not met, with what you observed vs what was expected), or `VERIFY: BLOCKED` (genuine blocker -- no browser, credentials you lack, an env you cannot reach; end with a single clear question the orchestrator can relay to the user). Do not soften a real failure into PASS, and do not manufacture a failure out of a nitpick. Converge.'
 
-  # Run the verify child agent on the reviewer model (which has browser
-  # capability). It is NOT the read-only reviewer clamp -- verify may start
+  # Run the verify child agent on the reviewer model (overridable per call
+  # with --model). It is NOT the read-only reviewer clamp -- verify may start
   # servers, rebuild images, and drive a browser. Runs under
   # CEREBRO_REVIEW_BACKEND (opencode by default).
   local agent; agent="$(review_child_agent_name verify)"
@@ -103,7 +104,7 @@ cmd_verify() {
 
   child_store_begin "$ckey" "$(review_backend)" verify "$repo" "${verify_branch:-auto}" "$child_log" "${prior:+preserve-id}"
   review_child_run 0 "$repo" "$verify_prompt" "$agent" "$prior" \
-    "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+    "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "${model:-$CEREBRO_REVIEW_MODEL}"
   rc=$?
 
   # Stale fallback: a resume the model no longer recognizes fails before any
@@ -114,7 +115,7 @@ cmd_verify() {
     : > "$id_capture"
     child_store_begin "$ckey" "$(review_backend)" verify "$repo" "${verify_branch:-auto}" "$child_log"
     review_child_run 0 "$repo" "$verify_prompt" "$agent" "" \
-      "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+      "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "${model:-$CEREBRO_REVIEW_MODEL}"
     rc=$?
   fi
 

@@ -14,13 +14,19 @@ cmd_answer() {
 
   local child_id="${1:-}"; shift || true
   local answer=""
+  local model=""
   # Second positional, if present and not a flag, is the answer text.
-  if [[ $# -gt 0 ]]; then
+  if [[ $# -gt 0 && "${1:-}" != --* ]]; then
     answer="$1"; shift
   fi
-  [[ $# -eq 0 ]] || die "answer: unknown arg: $1"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --model) shift; model="${1:-}"; shift || true ;;
+      *) die "answer: unknown arg: $1" ;;
+    esac
+  done
 
-  [[ -n "$child_id" ]] || die "usage: cerebro answer <child-session-id> \"<answer>\""
+  [[ -n "$child_id" ]] || die "usage: cerebro answer <child-session-id> \"<answer>\" [--model <provider/model>]"
   [[ -n "$answer" ]] || die "answer: empty answer (pass the answer text as the second argument)"
 
   local rows n
@@ -59,7 +65,7 @@ cmd_answer() {
 
   child_store_begin "$ckey" "$provider" "$role" "$repo" "$label" "$child_log" preserve-id
   child_run 0 "$repo" "$child_prompt" "$agent" "$prior" \
-    "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey"
+    "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey" "$model"
   rc=$?
   rm -f "$id_capture"
 

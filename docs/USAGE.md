@@ -298,8 +298,14 @@ struggle with cerebro's agentic loop; pick the largest model you can run.
 
 The read-only reviewer (`cerebro review` / `audit` / `verify` / `improve`)
 runs under `CEREBRO_REVIEW_BACKEND`, which defaults to `opencode` (on
-`CEREBRO_REVIEW_MODEL`, an independent model) so it stays a genuinely
-independent pair of eyes. Set `CEREBRO_REVIEW_BACKEND=claude` to run it under
+`CEREBRO_REVIEW_MODEL`, a suggested-different model) so it can stay a
+genuinely independent pair of eyes. The difference is a suggestion, not a
+rule: leaving `CEREBRO_REVIEW_MODEL` equal to `CEREBRO_MODEL` is allowed.
+Any subcommand also takes `--model <provider/model>` to override its default
+model per call, and `cerebro models` lists the user's model catalog (see
+"Model catalog" below) so the orchestrator can pick a model per task --
+e.g. a vision-capable model for `cerebro verify`'s screenshot verification.
+Set `CEREBRO_REVIEW_BACKEND=claude` to run the reviewer under
 the `claude` CLI instead -- e.g. to review on a Claude model, or to keep the
 whole stack on one provider:
 
@@ -309,10 +315,40 @@ CEREBRO_REVIEW_BACKEND=claude CEREBRO_REVIEW_MODEL=<claude-model-alias> cerebro
 
 When `CEREBRO_REVIEW_BACKEND=claude` and `CEREBRO_CLAUDE_BASE_URL` is set, the
 reviewer points at the same custom endpoint as the editing children, and
-`CEREBRO_REVIEW_MODEL` must then name a model that endpoint serves (cerebro
-pins the gateway to the review model, not the editing model, for the reviewer
-run). With `CEREBRO_CLAUDE_BASE_URL` unset the reviewer uses the claude.ai
-subscription `claude` is logged into.
+`CEREBRO_REVIEW_MODEL` (or the `--model` you pass) must then name a model
+that endpoint serves (cerebro pins the gateway to that model for the
+reviewer run). With `CEREBRO_CLAUDE_BASE_URL` unset the reviewer uses the
+claude.ai subscription `claude` is logged into.
+
+### Model catalog
+
+`cerebro models` prints the catalog you maintain at
+`$CEREBRO_HOME/models-config.json`. Each entry has an `id` (the exact
+`provider/model` string passed to a subcommand's `--model` flag, same shape
+as `CEREBRO_MODEL`), a `capabilities` list (an open set of present tags;
+`vision` = multimodal image input, the one that matters for reading browser
+screenshots during `verify`), and a free-text `description` for judgement
+the orchestrator reasons about (context window, reasoning depth, cost).
+
+```json
+{
+  "models": [
+    { "id": "github-copilot/gemini-3.1-pro-preview",
+      "capabilities": ["vision", "tools", "thinking"],
+      "description": "Strong generalist; smaller context window." },
+    { "id": "minimax/minimax-m3",
+      "capabilities": ["vision", "tools", "audio"],
+      "description": "Vision + audio; use for screenshot/visual verification." }
+  ]
+}
+```
+
+The orchestrator reads this catalog with `cerebro models` and chooses a
+model per task -- e.g. routing `cerebro verify` to a `vision`-capable model
+when the default review model lacks vision, or fanning a `cerebro review`
+across several models by calling it once per catalog entry with `--model`.
+A missing catalog is not an error: the subcommands fall back to their
+env-var defaults.
 
 ## Session state
 

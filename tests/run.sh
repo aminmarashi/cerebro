@@ -1796,6 +1796,19 @@ if [[ -x "$REVIEW_STUB_DIR/opencode" ]]; then
     failures+=("127c review model missing")
   fi
 
+  # --- 127m. --model overrides the review model per call (passes the catalog
+  # id straight through to opencode's --model flag). ---
+  : > "$REVIEW_ARGV_LOG"
+  env PATH="$REVIEW_STUB_PATH" CEREBRO_SESSION_ID="$RSESS" \
+    "$CEREBRO_BIN" review "$REPO" --model minimax/minimax-m3 >/dev/null 2>&1
+  if grep -q -- '--model minimax/minimax-m3' "$REVIEW_ARGV_LOG" \
+      && ! grep -q 'gpt-5.5' "$REVIEW_ARGV_LOG"; then
+    printf 'PASS  127m  review --model overrides the review model per call\n'; pass=$((pass + 1))
+  else
+    printf 'FAIL  127m  review --model not passed through [argv=%s]\n' "$(cat "$REVIEW_ARGV_LOG")"; fail=$((fail + 1))
+    failures+=("127m review --model :: argv=$(cat "$REVIEW_ARGV_LOG")")
+  fi
+
   # --- 127e. the findings are the run's final message, written to out_path ---
   if [[ -s "$rev_out" ]] && grep -q 'no issues found' "$rev_out"; then
     printf 'PASS  127e  review findings are the run final message (written to out_path)\n'; pass=$((pass + 1))
@@ -1964,9 +1977,11 @@ else
   failures+=("129d claude reviewer sys prompt :: $rsp")
 fi
 
-# --- 129e. backend_claude_endpoint_env pins the gateway to the supplied model
-# (the review model for the reviewer path) and still dies when the effective
-# model is the shipped editing default. ---
+# --- 129e. backend_claude_endpoint_env pins the gateway to the supplied
+# model (the review model for the reviewer path) and no longer dies when the
+# effective model is the shipped editing default -- the review-model
+# difference is a suggestion, not a rule, so a custom endpoint with the
+# default model now pins and proceeds. ---
 pin="$(CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 bash -c '
   set -uo pipefail
   CEREBRO_LIB_DIR="$1"
@@ -1975,19 +1990,49 @@ pin="$(CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 bash -c '
   . "$CEREBRO_LIB_DIR/backend-claude.sh"
   backend_claude_endpoint_env "$CEREBRO_REVIEW_MODEL"
   printf "%s" "$ANTHROPIC_MODEL"' _ "$here/../lib" 2>/dev/null)"
-die_rc=0
-CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 bash -c '
+default_pin="" default_rc=0
+default_pin="$(CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 bash -c '
   set -uo pipefail
   CEREBRO_LIB_DIR="$1"
   . "$CEREBRO_LIB_DIR/config.sh"
   . "$CEREBRO_LIB_DIR/helpers.sh"
   . "$CEREBRO_LIB_DIR/backend-claude.sh"
-  backend_claude_endpoint_env' _ "$here/../lib" >/dev/null 2>&1 || die_rc=$?
-if [[ "$pin" == "github-copilot/gpt-5.5" ]] && (( die_rc != 0 )); then
-  printf 'PASS  129e endpoint_env pins review model; dies on editing default\n'; pass=$((pass + 1))
+  backend_claude_endpoint_env
+  printf "%s" "$ANTHROPIC_MODEL"' _ "$here/../lib" 2>/dev/null)" || default_rc=$?
+if [[ "$pin" == "github-copilot/gpt-5.5" \
+   && "$default_pin" == "github-copilot/gemini-3.1-pro-preview" \
+   && (( default_rc == 0 )) ]]; then
+  printf 'PASS  129e endpoint_env pins review + editing default; no longer dies\n'; pass=$((pass + 1))
 else
-  printf 'FAIL  129e endpoint_env [pin=%s die_rc=%d]\n' "$pin" "$die_rc"; fail=$((fail + 1))
-  failures+=("129e endpoint_env :: pin=$pin die_rc=$die_rc")
+  printf 'FAIL  129e endpoint_env [pin=%s default_pin=%s rc=%d]\n' "$pin" "$default_pin" "$default_rc"; fail=$((fail + 1))
+  failures+=("129e endpoint_env :: pin=$pin default_pin=$default_pin rc=$default_rc")
+fi
+
+# --- 130. cerebro models prints the user's model catalog ($CEREBRO_HOME/
+# models-config.json): text listing with id / capabilities / description, and
+# --json emits the raw array. A missing catalog is not an error. ---
+MDLHOME="$WORKDIR/mdl-home"
+mkdir -p "$MDLHOME"
+cat > "$MDLHOME/models-config.json" <<'MDL_EOF'
+{"models":[
+  {"id":"github-copilot/gemini-3.1-pro-preview","capabilities":["vision","tools","thinking"],"description":"Strong generalist; smaller context window."},
+  {"id":"minimax/minimax-m3","capabilities":["vision","tools","audio"],"description":"Vision + audio; use for screenshot verification."}
+]}
+MDL_EOF
+mdl_out="$(CEREBRO_HOME="$MDLHOME" "$CEREBRO_BIN" models 2>/dev/null)"
+mdl_json="$(CEREBRO_HOME="$MDLHOME" "$CEREBRO_BIN" models --json 2>/dev/null)"
+mkdir -p "$WORKDIR/empty-home"
+mdl_missing="$(CEREBRO_HOME="$WORKDIR/empty-home" "$CEREBRO_BIN" models 2>/dev/null)"
+if [[ "$mdl_out" == *"## minimax/minimax-m3"* \
+   && "$mdl_out" == *"capabilities: vision, tools, audio"* \
+   && "$mdl_out" == *"screenshot verification"* \
+   && "$mdl_json" == *'"id":"minimax/minimax-m3"'* \
+   && "$mdl_json" == *'"vision"'* \
+   && "$mdl_missing" == *"Create one to let the orchestrator pick models per task"* ]]; then
+  printf 'PASS  130  cerebro models lists catalog (text + json) and handles missing\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  130  cerebro models [out=%s json=%s missing=%s]\n' "$mdl_out" "$mdl_json" "$mdl_missing"; fail=$((fail + 1))
+  failures+=("130 cerebro models :: out=$mdl_out json=$mdl_json missing=$mdl_missing")
 fi
 
 # claude reviewer stub: emulate `claude -p` for the read-only reviewer -- log

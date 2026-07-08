@@ -14,6 +14,7 @@ cmd_execute() {
   local base_branch=""
   local new_branch=""
   local pair=0
+  local model=""
   # Second positional, if present and not a flag, is the plan path.
   if [[ $# -gt 0 && "${1:-}" != --* ]]; then
     plan_path="$1"; shift
@@ -23,12 +24,13 @@ cmd_execute() {
       --prompt) shift; prompt_text="${1:-}"; shift || true ;;
       --base)   shift; base_branch="${1:-}"; shift || true ;;
       --branch) shift; new_branch="${1:-}";  shift || true ;;
+      --model)  shift; model="${1:-}";       shift || true ;;
       --pair)   pair=1; shift ;;
       *) die "execute: unknown arg: $1" ;;
     esac
   done
   [[ -n "$repo" ]] \
-    || die "usage: cerebro execute <repo-abs-path> (<plan-path> | --prompt \"<text>\") [--base <branch>] [--branch <name>]"
+    || die "usage: cerebro execute <repo-abs-path> (<plan-path> | --prompt \"<text>\") [--base <branch>] [--branch <name>] [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "execute: repo path must be absolute: $repo"
   [[ -d "$repo" ]] || die "execute: repo not a directory: $repo"
   if [[ -n "$plan_path" && -n "$prompt_text" ]]; then
@@ -163,7 +165,7 @@ cmd_execute() {
     # it launches, so an interrupt now leaves a resumable record.
     child_store_begin "$ckey" "$provider" execute "$repo" "${new_branch:-auto}" "$child_log" "${prior:+preserve-id}"
     child_run "$pair" "$wt" "$child_prompt" "$agent" "$prior" \
-      "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey"
+      "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey" "$model"
     rc=$?
     pair_cleanup "$pair"
 
@@ -176,7 +178,7 @@ cmd_execute() {
       (( pair )) && pair_begin execute "$repo" "$new_branch" "$child_log" ""
       child_store_begin "$ckey" "$provider" execute "$repo" "${new_branch:-auto}" "$child_log"
       child_run "$pair" "$wt" "$child_prompt" "$agent" "" \
-        "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey"
+        "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey" "$model"
       rc=$?
       pair_cleanup "$pair"
     fi

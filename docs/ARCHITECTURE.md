@@ -62,15 +62,18 @@ Three kinds of work, three mechanisms:
   inside those children too). The reviewer (`codex`) is sandboxed
   read-only by construction.
 
-Visual / end-to-end verification is delegated to a `verify` child (on the
-reviewer model, which has browser capability) because the orchestrator
-has no browser/Playwright tool. `cerebro verify` is a HIGH-LEVEL
-REQUIREMENTS / ACCEPTANCE check from the big picture -- it drives the
-real running app the plan delivers and judges whether the observable
-behaviours are present and working when used for real. It is NOT a
-second static code review (that is `review` / `audit`'s job); it does
-not raise style nits, naming, or contrived edge cases. Its report ends
-with `VERIFY: PASS|FAIL|BLOCKED`.
+Visual / end-to-end verification is delegated to a `verify` child (which
+has browser capability) because the orchestrator has no browser/Playwright
+tool. `cerebro verify` is a HIGH-LEVEL REQUIREMENTS / ACCEPTANCE check
+from the big picture -- it drives the real running app the plan delivers
+and judges whether the observable behaviours are present and working when
+used for real. It is NOT a second static code review (that is `review` /
+`audit`'s job); it does not raise style nits, naming, or contrived edge
+cases. Its report ends with `VERIFY: PASS|FAIL|BLOCKED`. Browser
+verification reads screenshots, which needs a model with the `vision`
+capability; the orchestrator picks the model per call via `--model`,
+discovering available models and their capabilities through `cerebro
+models` (the user's `$CEREBRO_HOME/models-config.json` catalog).
 
 ## Architectural decisions
 

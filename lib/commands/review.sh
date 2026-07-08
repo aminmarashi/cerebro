@@ -12,14 +12,16 @@ cmd_review() {
   local base=""
   local explicit_base="false"
   local criteria_file=""
+  local model=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --base) shift; base="${1:-}"; explicit_base="true"; shift || true ;;
       --criteria-file) shift; criteria_file="${1:-}"; shift || true ;;
+      --model) shift; model="${1:-}"; shift || true ;;
       *) die "review: unknown arg: $1" ;;
     esac
   done
-  [[ -n "$repo" ]] || die "usage: cerebro review <repo-abs-path> [--base <ref>] [--criteria-file <plan-path>]"
+  [[ -n "$repo" ]] || die "usage: cerebro review <repo-abs-path> [--base <ref>] [--criteria-file <plan-path>] [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "review: repo path must be absolute: $repo"
   [[ -d "$repo" ]] || die "review: repo not a directory: $repo"
 
@@ -157,17 +159,18 @@ $criteria_block
 </plan>"
   fi
 
-  # Run the read-only reviewer agent on the independent review model
-  # (CEREBRO_REVIEW_MODEL). Its findings are its final message, which we capture
-  # and write to out_path; the JSON event stream is tee'd to child_log. The
-  # session id is persisted at startup so an interrupt stays resumable.
-  # The reviewer runs under CEREBRO_REVIEW_BACKEND (opencode by default).
+  # Run the read-only reviewer agent on the review model
+  # (CEREBRO_REVIEW_MODEL, overridable per call with --model). Its findings are
+  # its final message, which we capture and write to out_path; the JSON event
+  # stream is tee'd to child_log. The session id is persisted at startup so an
+  # interrupt stays resumable. The reviewer runs under CEREBRO_REVIEW_BACKEND
+  # (opencode by default).
   local agent; agent="$(review_child_agent_name review)"
   local rc id_capture out_capture; id_capture="$(mktemp)"; out_capture="$(mktemp)"
 
   child_store_begin "$ckey" "$(review_backend)" review "$repo" "${review_branch:-auto}" "$child_log" "${prior:+preserve-id}"
   review_child_run 0 "$repo" "$review_prompt" "$agent" "$prior" \
-    "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+    "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "${model:-$CEREBRO_REVIEW_MODEL}"
   rc=$?
 
   # Stale fallback: a resume the model no longer recognizes fails before any
@@ -178,7 +181,7 @@ $criteria_block
     : > "$id_capture"
     child_store_begin "$ckey" "$(review_backend)" review "$repo" "${review_branch:-auto}" "$child_log"
     review_child_run 0 "$repo" "$review_prompt" "$agent" "" \
-      "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "$CEREBRO_REVIEW_MODEL"
+      "$child_log" "$out_capture" "$id_capture" "$store_file" "$ckey" "${model:-$CEREBRO_REVIEW_MODEL}"
     rc=$?
   fi
 
@@ -243,6 +246,7 @@ cmd_apply_review() {
   local notes=""
   local saw_prompt=0
   local pair=0
+  local model=""
   if [[ $# -gt 0 && "${1:-}" != --* ]]; then
     findings="$1"; shift
   fi
@@ -250,6 +254,7 @@ cmd_apply_review() {
     case "$1" in
       --prompt) saw_prompt=1; shift; prompt_text="${1:-}"; shift || true ;;
       --notes)  shift; notes="${1:-}";                     shift || true ;;
+      --model)  shift; model="${1:-}";                     shift || true ;;
       --pair)   pair=1; shift ;;
       *) die "apply-review: unknown arg: $1" ;;
     esac
@@ -263,7 +268,7 @@ cmd_apply_review() {
     die "apply-review: --prompt requires a non-empty value"
   fi
   [[ -n "$repo" ]] \
-    || die "usage: cerebro apply-review <repo-abs-path> (<findings-path> [--notes \"...\"] | --prompt \"<text>\")"
+    || die "usage: cerebro apply-review <repo-abs-path> (<findings-path> [--notes \"...\"] | --prompt \"<text>\") [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "apply-review: repo path must be absolute: $repo"
   [[ -d "$repo" ]] || die "apply-review: repo not a directory: $repo"
 
@@ -374,7 +379,7 @@ cmd_apply_review() {
   while :; do
     child_store_begin "$ckey" "$provider" apply-review "$repo" "${ar_branch:-default}" "$child_log" "${prior:+preserve-id}"
     child_run "$pair" "$repo" "$child_prompt" "$agent" "$prior" \
-      "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey"
+      "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey" "$model"
     rc=$?
     pair_cleanup "$pair"
 
@@ -387,7 +392,7 @@ cmd_apply_review() {
       (( pair )) && pair_begin apply-review "$repo" "$ar_branch" "$child_log" ""
       child_store_begin "$ckey" "$provider" apply-review "$repo" "${ar_branch:-default}" "$child_log"
       child_run "$pair" "$repo" "$child_prompt" "$agent" "" \
-        "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey"
+        "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey" "$model"
       rc=$?
       pair_cleanup "$pair"
     fi

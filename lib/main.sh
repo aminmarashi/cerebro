@@ -24,6 +24,7 @@ main() {
     verify) shift; cmd_verify "$@" ;;
     doc-write) shift; cmd_doc_write "$@" ;;
     answer) shift; cmd_answer "$@" ;;
+    models)  shift; cmd_models "$@" ;;
     steer) shift; cmd_steer "$@" ;;
     restart) shift; cmd_restart "$@" ;;
     observe) shift; cmd_observe "$@" ;;
