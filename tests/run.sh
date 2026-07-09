@@ -3263,6 +3263,53 @@ else
   failures+=("176 cerebro_improve_prompt content")
 fi
 
+# --- 176b. $CEREBRO_HOME/config.json supplies option defaults with precedence
+# env > config.json > hardcoded default. Unknown keys are ignored, a missing
+# file falls back to the hardcoded defaults, and an env var overrides the file
+# for the keys it sets while the file still applies to the rest. Uses env -i so
+# the test runner's own exported CEREBRO_* vars don't leak in. ---
+CFGHOME="$WORKDIR/cfg-home"
+mkdir -p "$CFGHOME"
+cat > "$CFGHOME/config.json" <<'CFG_EOF'
+{
+  "backend": "claude",
+  "model": "anthropic/claude-opus-4",
+  "timeout": 300,
+  "pair_idle": 12,
+  "child_session_ttl": 3600,
+  "unknown_key": "ignored"
+}
+CFG_EOF
+cfg_vals="$(env -i HOME="$HOME" PATH="$PATH" \
+  CEREBRO_LIB_DIR="$here/../lib" CEREBRO_HOME="$CFGHOME" bash -c '
+    set -uo pipefail
+    . "$CEREBRO_LIB_DIR/config.sh"
+    printf "backend=%s model=%s timeout=%s pair_idle=%s child_session_ttl=%s review_backend=%s pair_stall=%s\n" \
+      "$CEREBRO_BACKEND" "$CEREBRO_MODEL" "$CEREBRO_TIMEOUT" "$CEREBRO_PAIR_IDLE" \
+      "$CEREBRO_CHILD_SESSION_TTL" "$CEREBRO_REVIEW_BACKEND" "$CEREBRO_PAIR_STALL"' 2>/dev/null)"
+cfg_env="$(env -i HOME="$HOME" PATH="$PATH" \
+  CEREBRO_LIB_DIR="$here/../lib" CEREBRO_HOME="$CFGHOME" \
+  CEREBRO_BACKEND=opencode CEREBRO_TIMEOUT=0 bash -c '
+    set -uo pipefail
+    . "$CEREBRO_LIB_DIR/config.sh"
+    printf "backend=%s model=%s timeout=%s pair_idle=%s\n" \
+      "$CEREBRO_BACKEND" "$CEREBRO_MODEL" "$CEREBRO_TIMEOUT" "$CEREBRO_PAIR_IDLE"' 2>/dev/null)"
+mkdir -p "$WORKDIR/cfg-empty"
+cfg_missing="$(env -i HOME="$HOME" PATH="$PATH" \
+  CEREBRO_LIB_DIR="$here/../lib" CEREBRO_HOME="$WORKDIR/cfg-empty" bash -c '
+    set -uo pipefail
+    . "$CEREBRO_LIB_DIR/config.sh"
+    printf "backend=%s model=%s timeout=%s pair_idle=%s\n" \
+      "$CEREBRO_BACKEND" "$CEREBRO_MODEL" "$CEREBRO_TIMEOUT" "$CEREBRO_PAIR_IDLE"' 2>/dev/null)"
+if [[ "$cfg_vals" == "backend=claude model=anthropic/claude-opus-4 timeout=300 pair_idle=12 child_session_ttl=3600 review_backend=opencode pair_stall=180" \
+   && "$cfg_env" == "backend=opencode model=anthropic/claude-opus-4 timeout=0 pair_idle=12" \
+   && "$cfg_missing" == "backend=opencode model=github-copilot/gemini-3.1-pro-preview timeout=0 pair_idle=60" ]]; then
+  printf 'PASS  176b config.json option defaults (env > file > default)\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  176b config.json [vals=%s env=%s missing=%s]\n' "$cfg_vals" "$cfg_env" "$cfg_missing"; fail=$((fail + 1))
+  failures+=("176b config.json :: vals=$cfg_vals env=$cfg_env missing=$cfg_missing")
+fi
+
 # ========================================================================
 # 177. ACP relay: `cerebro acp` is a thin JSON-RPC proxy between an ACP editor
 # and a per-session upstream child. tests/acp/relay_test.py is the editor side;

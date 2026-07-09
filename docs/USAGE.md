@@ -321,22 +321,54 @@ curl -fsSL https://raw.githubusercontent.com/aminmarashi/cerebro/main/uninstall.
 
 ## Configuration
 
-Env vars (all optional):
+Every option below can be set two ways: as an env var (`CEREBRO_*`) or as a
+key in the options file at `$CEREBRO_HOME/config.json` (alongside the model
+catalog at `$CEREBRO_HOME/models-config.json`). **Env vars take precedence**
+over the file, and the file takes precedence over the hardcoded default
+(`env > config.json > default`). The file is handy for options you want set on
+every run without polluting your shell; use env vars for per-invocation
+overrides. Keys are lower-case option names without the `CEREBRO_` prefix
+(e.g. `backend`, `review_model`, `pair_idle`). Unknown keys are ignored, and a
+missing/invalid file is not an error. `CEREBRO_HOME` itself is env-only (the
+file lives under it).
 
-| var | meaning | default |
-|-----|---------|---------|
-| `CEREBRO_HOME` | base dir for all state | `~/.cerebro` |
-| `CEREBRO_BACKEND` | agent CLI for the orchestrator + editing children | `opencode` |
-| `CEREBRO_REVIEW_BACKEND` | agent CLI for the read-only reviewer (`review` / `audit` / `verify` / `improve`), independent of `CEREBRO_BACKEND` so the reviewer can use a different backend than the editor | `opencode` |
-| `CEREBRO_MODEL` | model alias for child `claude -p` | provider default |
-| `CEREBRO_REVIEW_MODEL` | model alias for the read-only reviewer | `github-copilot/gpt-5.5` |
-| `CEREBRO_CLAUDE_BASE_URL` | optional Anthropic-compatible endpoint for the claude backend (e.g. a local Ollama `/v1/messages` server, or any proxy). empty = the claude.ai subscription `claude` is logged into. when set, the effective model (`CEREBRO_MODEL`, or `CEREBRO_REVIEW_MODEL` when the reviewer runs under claude) must name a model the endpoint serves | empty (subscription) |
-| `CEREBRO_CLAUDE_AUTH_TOKEN` | bearer token for `CEREBRO_CLAUDE_BASE_URL` (local no-auth servers ignore it; set the real key for an authed gateway) | `ollama` |
-| `CEREBRO_TIMEOUT` | wall-clock cap (s) per child call | `0` (no cap, so e2e runs and CI waits are never killed) |
-| `CEREBRO_CHILD_SESSION_TTL` | how long (s) a stored child id stays resumable | `86400` (24h) |
-| `CEREBRO_PAIR_IDLE` | steering window (s) after each paired turn | `60` |
-| `CEREBRO_CODEX_CMD` | codex executable | `codex` |
-| `CEREBRO_DEBUG` | `1` for verbose logs | `0` |
+```json
+{
+  "backend": "claude",
+  "model": "anthropic/claude-opus-4",
+  "review_model": "github-copilot/gpt-5.5",
+  "timeout": 0,
+  "pair_idle": 60,
+  "child_session_ttl": 86400,
+  "debug": 0
+}
+```
+
+Options and their defaults (all optional):
+
+| option (key) | env var | meaning | default |
+|-----|-----|---------|---------|
+| `home` | `CEREBRO_HOME` | base dir for all state (env-only, not read from config.json) | `~/.cerebro` |
+| `backend` | `CEREBRO_BACKEND` | agent CLI for the orchestrator + editing children | `opencode` |
+| `review_backend` | `CEREBRO_REVIEW_BACKEND` | agent CLI for the read-only reviewer (`review` / `audit` / `verify` / `improve`), independent of `CEREBRO_BACKEND` so the reviewer can use a different backend than the editor | `opencode` |
+| `model` | `CEREBRO_MODEL` | model alias for child `claude -p` | provider default |
+| `review_model` | `CEREBRO_REVIEW_MODEL` | model alias for the read-only reviewer | `github-copilot/gpt-5.5` |
+| `claude_base_url` | `CEREBRO_CLAUDE_BASE_URL` | optional Anthropic-compatible endpoint for the claude backend (e.g. a local Ollama `/v1/messages` server, or any proxy). empty = the claude.ai subscription `claude` is logged into. when set, the effective model (`CEREBRO_MODEL`, or `CEREBRO_REVIEW_MODEL` when the reviewer runs under claude) must name a model the endpoint serves | empty (subscription) |
+| `claude_auth_token` | `CEREBRO_CLAUDE_AUTH_TOKEN` | bearer token for `CEREBRO_CLAUDE_BASE_URL` (local no-auth servers ignore it; set the real key for an authed gateway) | `ollama` |
+| `timeout` | `CEREBRO_TIMEOUT` | wall-clock cap (s) per child call | `0` (no cap, so e2e runs and CI waits are never killed) |
+| `child_idle_timeout` | `CEREBRO_CHILD_IDLE_TIMEOUT` | inactivity window (s) before the stream parser declares a child stalled | `180` |
+| `child_session_ttl` | `CEREBRO_CHILD_SESSION_TTL` | how long (s) a stored child id stays resumable | `86400` (24h) |
+| `pair_idle` | `CEREBRO_PAIR_IDLE` | steering window (s) after each paired turn | `60` |
+| `pair_stall` | `CEREBRO_PAIR_STALL` | stream-freeze window (s) before a paired child is restarted | `180` |
+| `pair_stall_busy` | `CEREBRO_PAIR_STALL_BUSY` | busy-but-stalled window (s) before a restart | `450` |
+| `pair_stall_retries` | `CEREBRO_PAIR_STALL_RETRIES` | max restart attempts for a stalled paired child | `2` |
+| `pair_stall_backoff` | `CEREBRO_PAIR_STALL_BACKOFF` | base (s) for the exponential restart backoff | `5` |
+| `opencode_cmd` | `CEREBRO_OPENCODE_CMD` | opencode executable | `opencode` |
+| `claude_cmd` | `CEREBRO_CLAUDE_CMD` | claude executable | `claude` |
+| `overlay_cap` | `CEREBRO_OVERLAY_CAP` | max chars in a single harness overlay file | `4000` |
+| `meta_horizon` | `CEREBRO_META_HORIZON` | fast-loop runs between meta-skill (`--meta`) runs | `2` |
+| `improve_eta_1` / `_2` / `_3` | `CEREBRO_IMPROVE_ETA_*` | frontier-selection weights (utility / meta-productivity / novelty) | `1.0` / `0.5` / `0.25` |
+| `debug` | `CEREBRO_DEBUG` | `1` for verbose logs | `0` |
 
 Two deliberate limits to know about:
 

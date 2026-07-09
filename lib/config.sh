@@ -1,22 +1,95 @@
 # cerebro lib: config
 # global config: set -uo pipefail and CEREBRO_* env defaults
 # Sourced by bin/cerebro; not meant to be executed directly.
+#
+# Option precedence is env > $CEREBRO_HOME/config.json > hardcoded default:
+# every CEREBRO_* option below reads ${CEREBRO_VAR:-${CEREBRO_CFG_VAR:-default}},
+# where CEREBRO_CFG_VAR is populated from the optional config.json (see
+# _cerebro_options_load). CEREBRO_HOME itself is env-only -- the config file
+# lives under it, so it can't bootstrap itself from the file.
 
 set -uo pipefail
 
 CEREBRO_HOME="${CEREBRO_HOME:-$HOME/.cerebro}"
+
+# ----- options config file ($CEREBRO_HOME/config.json) ----------------------
+# Optional JSON file alongside models-config.json. Top-level keys are lower-
+# case option names (e.g. "backend", "model", "pair_idle") and supply the
+# default for the matching CEREBRO_<KEY> env var. Env vars always win; the file
+# wins over the hardcoded defaults below. Unknown keys are silently ignored,
+# and a missing/invalid file is not an error -- it just leaves the CEREBRO_CFG_*
+# scratch vars empty so the ${...:-default} fallbacks apply. Values are read as
+# strings (jq tostring); numeric options are coerced by their arithmetic
+# context at use, exactly as an env var would be.
+CEREBRO_CFG_BACKEND=""
+CEREBRO_CFG_REVIEW_BACKEND=""
+CEREBRO_CFG_MODEL=""
+CEREBRO_CFG_REVIEW_MODEL=""
+CEREBRO_CFG_TIMEOUT=""
+CEREBRO_CFG_CHILD_IDLE_TIMEOUT=""
+CEREBRO_CFG_OPENCODE_CMD=""
+CEREBRO_CFG_CLAUDE_CMD=""
+CEREBRO_CFG_DEBUG=""
+CEREBRO_CFG_CLAUDE_BASE_URL=""
+CEREBRO_CFG_CLAUDE_AUTH_TOKEN=""
+CEREBRO_CFG_OVERLAY_CAP=""
+CEREBRO_CFG_META_HORIZON=""
+CEREBRO_CFG_IMPROVE_ETA_1=""
+CEREBRO_CFG_IMPROVE_ETA_2=""
+CEREBRO_CFG_IMPROVE_ETA_3=""
+CEREBRO_CFG_CHILD_SESSION_TTL=""
+CEREBRO_CFG_PAIR_IDLE=""
+CEREBRO_CFG_PAIR_STALL=""
+CEREBRO_CFG_PAIR_STALL_BUSY=""
+CEREBRO_CFG_PAIR_STALL_RETRIES=""
+CEREBRO_CFG_PAIR_STALL_BACKOFF=""
+_cerebro_options_load() {
+  local cfg="$CEREBRO_HOME/config.json"
+  [[ -r "$cfg" && -s "$cfg" ]] || return 0
+  local k v
+  while IFS=$'\t' read -r k v; do
+    [[ -n "$k" ]] || continue
+    case "$k" in
+      backend)             CEREBRO_CFG_BACKEND="$v" ;;
+      review_backend)     CEREBRO_CFG_REVIEW_BACKEND="$v" ;;
+      model)              CEREBRO_CFG_MODEL="$v" ;;
+      review_model)       CEREBRO_CFG_REVIEW_MODEL="$v" ;;
+      timeout)            CEREBRO_CFG_TIMEOUT="$v" ;;
+      child_idle_timeout) CEREBRO_CFG_CHILD_IDLE_TIMEOUT="$v" ;;
+      opencode_cmd)       CEREBRO_CFG_OPENCODE_CMD="$v" ;;
+      claude_cmd)         CEREBRO_CFG_CLAUDE_CMD="$v" ;;
+      debug)              CEREBRO_CFG_DEBUG="$v" ;;
+      claude_base_url)    CEREBRO_CFG_CLAUDE_BASE_URL="$v" ;;
+      claude_auth_token)  CEREBRO_CFG_CLAUDE_AUTH_TOKEN="$v" ;;
+      overlay_cap)        CEREBRO_CFG_OVERLAY_CAP="$v" ;;
+      meta_horizon)       CEREBRO_CFG_META_HORIZON="$v" ;;
+      improve_eta_1)      CEREBRO_CFG_IMPROVE_ETA_1="$v" ;;
+      improve_eta_2)      CEREBRO_CFG_IMPROVE_ETA_2="$v" ;;
+      improve_eta_3)      CEREBRO_CFG_IMPROVE_ETA_3="$v" ;;
+      child_session_ttl)  CEREBRO_CFG_CHILD_SESSION_TTL="$v" ;;
+      pair_idle)          CEREBRO_CFG_PAIR_IDLE="$v" ;;
+      pair_stall)         CEREBRO_CFG_PAIR_STALL="$v" ;;
+      pair_stall_busy)    CEREBRO_CFG_PAIR_STALL_BUSY="$v" ;;
+      pair_stall_retries) CEREBRO_CFG_PAIR_STALL_RETRIES="$v" ;;
+      pair_stall_backoff) CEREBRO_CFG_PAIR_STALL_BACKOFF="$v" ;;
+      # unknown keys are ignored
+    esac
+  done < <(jq -r 'to_entries[] | "\(.key)\t\(.value|tostring)"' "$cfg" 2>/dev/null)
+}
+_cerebro_options_load
+
 # Which agent backend drives the orchestrator + editing children:
 #   opencode -- `opencode run --agent` (the opencode CLI)
 #   claude    -- `claude -p` (the claude CLI)
 # Recorded into each session's metadata.json at launch so a resumed session
 # always reuses the backend it started with, regardless of the current env.
-CEREBRO_BACKEND="${CEREBRO_BACKEND:-opencode}"
+CEREBRO_BACKEND="${CEREBRO_BACKEND:-${CEREBRO_CFG_BACKEND:-opencode}}"
 # The model the orchestrator and every editing child (execute / apply-review /
 # doc-write / answer) run on. Captured separately as CEREBRO_DEFAULT_MODEL so
 # the claude backend can tell when the user has overridden it for a custom
 # endpoint (see CEREBRO_CLAUDE_BASE_URL below).
 CEREBRO_DEFAULT_MODEL="github-copilot/gemini-3.1-pro-preview"
-CEREBRO_MODEL="${CEREBRO_MODEL:-$CEREBRO_DEFAULT_MODEL}"
+CEREBRO_MODEL="${CEREBRO_MODEL:-${CEREBRO_CFG_MODEL:-$CEREBRO_DEFAULT_MODEL}}"
 # The model the read-only reviewer/auditor (cerebro review / cerebro audit /
 # cerebro verify / cerebro improve) runs on -- a SUGGESTED different model
 # from the implementer, so the review can be a genuinely independent pair of
@@ -30,24 +103,24 @@ CEREBRO_MODEL="${CEREBRO_MODEL:-$CEREBRO_DEFAULT_MODEL}"
 # reviewer runs under CEREBRO_REVIEW_BACKEND (opencode by default); when that
 # is opencode it needs opencode on PATH even if the editing children run
 # under claude.
-CEREBRO_REVIEW_MODEL="${CEREBRO_REVIEW_MODEL:-github-copilot/gpt-5.5}"
+CEREBRO_REVIEW_MODEL="${CEREBRO_REVIEW_MODEL:-${CEREBRO_CFG_REVIEW_MODEL:-github-copilot/gpt-5.5}}"
 # The backend the read-only reviewer (review / audit / verify / improve) runs
 # under, independent of CEREBRO_BACKEND so the reviewer can use a different CLI
 # than the orchestrator + editing children. opencode (the default, unchanged)
 # or claude. Not recorded in session metadata: the reviewer is ephemeral and a
 # backend mismatch on resume falls back to a fresh run via the existing
 # stale-fallback, so the env var at runtime is sufficient.
-CEREBRO_REVIEW_BACKEND="${CEREBRO_REVIEW_BACKEND:-opencode}"
-CEREBRO_TIMEOUT="${CEREBRO_TIMEOUT:-0}"   # 0/empty/none/unlimited = no cap
+CEREBRO_REVIEW_BACKEND="${CEREBRO_REVIEW_BACKEND:-${CEREBRO_CFG_REVIEW_BACKEND:-opencode}}"
+CEREBRO_TIMEOUT="${CEREBRO_TIMEOUT:-${CEREBRO_CFG_TIMEOUT:-0}}"   # 0/empty/none/unlimited = no cap
 # Inactivity timeout (seconds) for the child stream parser: if a spawned child
 # produces no new stream event for this window, parse_stream.py exits 5 with a
 # "child stalled" diagnostic instead of blocking forever. A slow-but-progressing
 # child (periodic events) is NOT killed -- the timer resets on every line. 0
 # disables the inactivity bound (legacy blocking read). Default 180s.
-CEREBRO_CHILD_IDLE_TIMEOUT="${CEREBRO_CHILD_IDLE_TIMEOUT:-180}"
-CEREBRO_OPENCODE_CMD="${CEREBRO_OPENCODE_CMD:-opencode}"
-CEREBRO_CLAUDE_CMD="${CEREBRO_CLAUDE_CMD:-claude}"
-CEREBRO_DEBUG="${CEREBRO_DEBUG:-0}"
+CEREBRO_CHILD_IDLE_TIMEOUT="${CEREBRO_CHILD_IDLE_TIMEOUT:-${CEREBRO_CFG_CHILD_IDLE_TIMEOUT:-180}}"
+CEREBRO_OPENCODE_CMD="${CEREBRO_OPENCODE_CMD:-${CEREBRO_CFG_OPENCODE_CMD:-opencode}}"
+CEREBRO_CLAUDE_CMD="${CEREBRO_CLAUDE_CMD:-${CEREBRO_CFG_CLAUDE_CMD:-claude}}"
+CEREBRO_DEBUG="${CEREBRO_DEBUG:-${CEREBRO_CFG_DEBUG:-0}}"
 # Optional custom Anthropic-compatible endpoint for the claude backend (e.g. a
 # local Ollama server exposing /v1/messages, or any proxy/gateway). Empty (the
 # default) = use the claude.ai subscription `claude` is logged into -- the
@@ -60,8 +133,8 @@ CEREBRO_DEBUG="${CEREBRO_DEBUG:-0}"
 # then name a model the endpoint actually serves. CEREBRO_CLAUDE_AUTH_TOKEN
 # defaults to a non-empty placeholder the endpoint ignores (local no-auth
 # servers); set it to the real key for an authenticated gateway.
-CEREBRO_CLAUDE_BASE_URL="${CEREBRO_CLAUDE_BASE_URL:-}"
-CEREBRO_CLAUDE_AUTH_TOKEN="${CEREBRO_CLAUDE_AUTH_TOKEN:-}"
+CEREBRO_CLAUDE_BASE_URL="${CEREBRO_CLAUDE_BASE_URL:-${CEREBRO_CFG_CLAUDE_BASE_URL:-}}"
+CEREBRO_CLAUDE_AUTH_TOKEN="${CEREBRO_CLAUDE_AUTH_TOKEN:-${CEREBRO_CFG_CLAUDE_AUTH_TOKEN:-}}"
 # cerebro ships its own opencode config tree (agents + plugin) under
 # $CEREBRO_HOME/.opencode and points every opencode invocation -- the
 # interactive orchestrator (when backend=opencode), every spawned opencode
@@ -76,7 +149,7 @@ export OPENCODE_CONFIG_DIR="$CEREBRO_HOME/.opencode"
 
 # Max chars in a single harness overlay file. Larger than learnings' cap since
 # overlays aren't all carried in one system message, but still bounded.
-CEREBRO_OVERLAY_CAP="${CEREBRO_OVERLAY_CAP:-4000}"
+CEREBRO_OVERLAY_CAP="${CEREBRO_OVERLAY_CAP:-${CEREBRO_CFG_OVERLAY_CAP:-4000}}"
 
 # ----- two-timescale self-improvement (MetaSkill-Evolve) --------------------
 # The fast loop (cerebro improve) evolves task-level overlays; the slow loop
@@ -84,7 +157,20 @@ CEREBRO_OVERLAY_CAP="${CEREBRO_OVERLAY_CAP:-4000}"
 # itself) every H fast-loop runs. Frontier-selection weights balance task
 # utility, meta-productivity, and visitation novelty when choosing which
 # past improvement state to build on.
-CEREBRO_META_HORIZON="${CEREBRO_META_HORIZON:-2}"
-CEREBRO_IMPROVE_ETA_1="${CEREBRO_IMPROVE_ETA_1:-1.0}"   # utility U
-CEREBRO_IMPROVE_ETA_2="${CEREBRO_IMPROVE_ETA_2:-0.5}"   # meta-productivity P
-CEREBRO_IMPROVE_ETA_3="${CEREBRO_IMPROVE_ETA_3:-0.25}"  # novelty N
+CEREBRO_META_HORIZON="${CEREBRO_META_HORIZON:-${CEREBRO_CFG_META_HORIZON:-2}}"
+CEREBRO_IMPROVE_ETA_1="${CEREBRO_IMPROVE_ETA_1:-${CEREBRO_CFG_IMPROVE_ETA_1:-1.0}}"   # utility U
+CEREBRO_IMPROVE_ETA_2="${CEREBRO_IMPROVE_ETA_2:-${CEREBRO_CFG_IMPROVE_ETA_2:-0.5}}"   # meta-productivity P
+CEREBRO_IMPROVE_ETA_3="${CEREBRO_IMPROVE_ETA_3:-${CEREBRO_CFG_IMPROVE_ETA_3:-0.25}}"  # novelty N
+
+# ----- pair / child-session options (also configurable via config.json) ----
+# These were historically read inline at their use sites with their own
+# hardcoded fallbacks. Setting them here through the same env > config.json >
+# default precedence makes $CEREBRO_HOME/config.json effective for them too.
+# The inline ${...:-default} reads at the use sites remain as a redundant
+# safety net and stay in sync with these defaults.
+CEREBRO_CHILD_SESSION_TTL="${CEREBRO_CHILD_SESSION_TTL:-${CEREBRO_CFG_CHILD_SESSION_TTL:-86400}}"
+CEREBRO_PAIR_IDLE="${CEREBRO_PAIR_IDLE:-${CEREBRO_CFG_PAIR_IDLE:-60}}"
+CEREBRO_PAIR_STALL="${CEREBRO_PAIR_STALL:-${CEREBRO_CFG_PAIR_STALL:-180}}"
+CEREBRO_PAIR_STALL_BUSY="${CEREBRO_PAIR_STALL_BUSY:-${CEREBRO_CFG_PAIR_STALL_BUSY:-450}}"
+CEREBRO_PAIR_STALL_RETRIES="${CEREBRO_PAIR_STALL_RETRIES:-${CEREBRO_CFG_PAIR_STALL_RETRIES:-2}}"
+CEREBRO_PAIR_STALL_BACKOFF="${CEREBRO_PAIR_STALL_BACKOFF:-${CEREBRO_CFG_PAIR_STALL_BACKOFF:-5}}"
