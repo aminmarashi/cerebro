@@ -3440,6 +3440,85 @@ else
   failures+=("181 acp bogus :: rc=$bogus_rc out=$bogus_out")
 fi
 
+# --- 183. `cerebro acp restart` reaps orphan upstream children whose parent
+# proxy has died. We simulate the orphan state by backgrounding the
+# "upstream child" inside a subshell that exits immediately -- the
+# kernel reparents the child to PID 1 (launchd) the moment the subshell
+# exits, exactly the state the new proxy must clean up before serving
+# `session/load` for that session. (A real upstream child reaches the
+# same state when its parent -- the `acp_server.py` proxy that exec'd
+# over `bin/cerebro acp` -- dies; the proxy has no living ancestor in
+# the session, so the kernel reparenting target is also PID 1.)
+REAP_SID="11111111-2222-3333-4444-555555555555"
+REAP_ACP_DIR="$CEREBRO_HOME/acp/$REAP_SID"
+mkdir -p "$REAP_ACP_DIR"
+
+# Spawn the orphan upstream child via an exiting subshell so the kernel
+# reparents it to PID 1. The cmdline must mention one of {acp, openode,
+# claude, npx} (see acp_reap_orphans' PPID==1 pre-filter) so the reaper
+# actually pays the env-read cost for this PID.
+( CEREBRO_HOME="$CEREBRO_HOME" CEREBRO_SESSION_ID="$REAP_SID" \
+    python3 -c 'import time; time.sleep(120)' \
+    fake_upstream_acp_child \
+    >/dev/null 2>&1 & )
+# Find the child PID. We don't have a $! because the spawn happened
+# inside a subshell. Search ps for the most recent python3 sleep that
+# has CEREBRO_SESSION_ID=<our sid> in env. The sleep-window below gives
+# the subshell time to exit and the kernel to reparent.
+REAP_CHILD_PID=""
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  while IFS= read -r line; do
+    pid="${line%% *}"; line="${line#"$pid" }"
+    ppid="${line%% *}"; line="${line#"$ppid" }"
+    [[ "$ppid" == "1" ]] || continue
+    if ps eww -p "$pid" 2>/dev/null | tail -n +2 \
+         | tr ' \t' '\n' | grep -Fxq "CEREBRO_SESSION_ID=$REAP_SID"; then
+      REAP_CHILD_PID="$pid"
+      break 2
+    fi
+  done < <(ps -A -o pid=,ppid=,command= 2>/dev/null | awk '{$1=$1; print}')
+  sleep 0.1
+done
+if [[ -z "$REAP_CHILD_PID" ]]; then
+  rmdir "$REAP_ACP_DIR" 2>/dev/null || true
+  printf 'SKIP  183  acp restart reaps orphans (could not produce an orphan child)\n'
+else
+  # Run restart. No proxy is running; restart's reaper should still
+  # find and kill the orphan (this is the safety net for "editor killed
+  # the proxy some other way" cases -- the orphan was left behind by a
+  # PREVIOUS proxy lifecycle, not by the current `cerebro acp restart`).
+  restart_out="$("$CEREBRO_BIN" acp restart 2>&1)"
+  restart_rc=$?
+  orphan_gone=0
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    kill -0 "$REAP_CHILD_PID" 2>/dev/null || { orphan_gone=1; break; }
+    sleep 0.2
+  done
+  wait "$REAP_CHILD_PID" 2>/dev/null
+  rmdir "$REAP_ACP_DIR" 2>/dev/null || true
+  if (( restart_rc == 0 )) && (( orphan_gone == 1 )) \
+     && [[ "$restart_out" == *"reaped"* ]] \
+     && [[ "$restart_out" == *"reaping orphan upstream child pid=$REAP_CHILD_PID"* ]]; then
+    printf 'PASS  183  acp restart reaps orphan upstream child(ren)\n'; pass=$((pass + 1))
+  else
+    printf 'FAIL  183  acp restart reaps orphans [rc=%d gone=%d out=%s]\n' "$restart_rc" "$orphan_gone" "$restart_out"; fail=$((fail + 1))
+    failures+=("183 acp restart reaps orphans :: rc=$restart_rc gone=$orphan_gone out=$restart_out")
+    kill -KILL "$REAP_CHILD_PID" 2>/dev/null; wait "$REAP_CHILD_PID" 2>/dev/null
+  fi
+fi
+
+# --- 184. `cerebro acp restart` is idempotent: running it again with no
+# proxy and no orphans is a no-op (no errors, exit 0).
+restart_out2="$("$CEREBRO_BIN" acp restart 2>&1)"
+restart_rc2=$?
+if (( restart_rc2 == 0 )) && [[ "$restart_out2" == *"no running proxy"* ]] \
+   && [[ "$restart_out2" != *"reap"* ]]; then
+  printf 'PASS  184  acp restart is idempotent (no proxy + no orphans)\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  184  acp restart idempotent [rc=%d out=%s]\n' "$restart_rc2" "$restart_out2"; fail=$((fail + 1))
+  failures+=("184 acp restart idempotent :: rc=$restart_rc2 out=$restart_out2")
+fi
+
 # --- 182. `cerebro acp-mint` and `cerebro acp-set-foreign` (legacy top-level
 # forms) are no longer recognised: they should fall through to
 # "unknown subcommand". The internal mint/set-foreign are reachable as

@@ -76,6 +76,15 @@ cmd_acp() {
     "")      ;;
     *)       die "cerebro acp: unknown subcommand: $1 (try: cerebro acp restart)" ;;
   esac
+  # Reap any orphan upstream children left behind by a previous proxy that
+  # exited without going through a clean per-session teardown (e.g. SIGTERM
+  # with no signal handler, or an editor crash). Without this, the new
+  # proxy's session/load may pick up a foreign session id that the orphan
+  # is still bound to, and the editor's prompt errors out with
+  # "ACP connection closed". Done before the python server starts so we
+  # never see our own freshly-spawned children as orphans (their PPID is
+  # this process, not 1).
+  acp_reap_orphans
   require_deps
   acp_require_python_deps
   materialise_home
@@ -140,12 +149,15 @@ cmd_acp_set_foreign() {
 # CEREBRO_HOME) to exit, so the editor respawns it and the new session
 # picks up the fresh $CEREBRO_HOME/config.json and CEREBRO_* env. The proxy
 # is a long-lived process spawned by the editor; SIGTERM closes the JSON-RPC
-# pipe and the editor (Zed, ...) respawns `cerebro acp` automatically. The
-# per-session $CEREBRO_HOME/acp/<sid>/ dirs and their spawned upstream
-# children are NOT walked or killed here -- on reconnect the editor's
-# session/load mints fresh sessions, and the new materialisation in
-# cmd_acp_mint will overwrite the stale per-session dirs on first use.
-# Idempotent: no proxy running -> exit 0.
+# pipe and the editor (Zed, ...) respawns `cerebro acp` automatically. After
+# the proxy exits, also reap any orphan upstream children (the per-session
+# `opencode acp` / `claude-agent-acp` processes the old proxy spawned); they
+# were attached to the dead proxy, so leaving them alive means the new
+# proxy's `session/load` for those session ids will conflict with the orphan
+# and the editor sees "ACP connection closed" on its next prompt. The new
+# proxy itself also reaps on startup (see cmd_acp), so a manual kill of the
+# proxy via Activity Monitor is also handled on the next editor reconnect.
+# Idempotent: no proxy running -> exit 0; the orphan reaping still runs.
 cmd_acp_restart() {
   local pids=() pid home
   while IFS= read -r pid; do
@@ -155,8 +167,7 @@ cmd_acp_restart() {
   done < <(acp_running_proxy_pids)
   case "${#pids[@]}" in
     0)
-      say "cerebro acp: no running proxy for CEREBRO_HOME=$CEREBRO_HOME (already stopped, or never started) -- nothing to do"
-      return 0
+      say "cerebro acp: no running proxy for CEREBRO_HOME=$CEREBRO_HOME (already stopped, or never started)"
       ;;
     1)
       say "cerebro acp: restarting proxy pid=${pids[0]} (CEREBRO_HOME=$CEREBRO_HOME)"
@@ -170,13 +181,15 @@ cmd_acp_restart() {
         warn "cerebro acp: proxy pid=${pids[0]} did not exit on SIGTERM; sending SIGKILL"
         kill -KILL "${pids[0]}" 2>/dev/null || true
       fi
-      say "cerebro acp: proxy ${pids[0]} stopped -- the editor will respawn it and new sessions will pick up the fresh config"
-      return 0
+      say "cerebro acp: proxy ${pids[0]} stopped"
       ;;
     *)
       die "cerebro acp: multiple proxies found for CEREBRO_HOME=$CEREBRO_HOME: ${pids[*]} (kill the wrong ones manually with: kill -TERM <pid>)"
       ;;
   esac
+  acp_reap_orphans
+  say "cerebro acp: restart done -- the editor will respawn it and new sessions will pick up the fresh config"
+  return 0
 }
 
 # acp_running_proxy_pids -- PIDs of processes whose command line mentions
@@ -215,4 +228,105 @@ acp_proxy_env_home() {
   fi
   printf '%s\n' "$blob" \
     | awk -F= 'index($0, "CEREBRO_HOME=")==1 { sub(/^CEREBRO_HOME=/,""); print; exit }'
+}
+
+# acp_pid_env_get <pid> <key> -- echo the value of env <key> in <pid>'s
+# environment, or empty if unset. macOS exposes the env via `ps eww -p
+# <pid>`; linux exposes it via /proc/<pid>/environ (NUL-separated). On
+# macOS the values may contain newlines/=/spaces that would break a naive
+# `KEY=VAL` tokenisation -- so we read the WHOLE blob, then awk-pick the
+# line that starts with "<key>=" and emit everything after it. This is
+# the same trick `acp_proxy_env_home` uses, kept here as a separate
+# function so the orphan reaper can pull any env key it likes.
+acp_pid_env_get() {
+  local pid="$1" key="$2"
+  [[ -n "$pid" && -n "$key" ]] || return 0
+  local blob=""
+  if [[ -r "/proc/$pid/environ" ]]; then
+    blob="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null || true)"
+  else
+    blob="$(ps eww -p "$pid" 2>/dev/null | tail -n +2 | tr ' \t' '\n' || true)"
+  fi
+  printf '%s\n' "$blob" \
+    | awk -v k="$key" -F= 'index($0, k "=")==1 { sub("^" k "=", ""); print; exit }'
+}
+
+# acp_reap_orphans -- for every per-session project dir under
+# $CEREBRO_HOME/acp/, kill any orphan upstream child bound to that session.
+# Called from both cmd_acp_restart (after the proxy dies) and cmd_acp
+# startup (so a manually-killed proxy is also cleaned up on next editor
+# reconnect). Quiet: no output when there are no orphans to reap.
+#
+# Performance: doing one pass per session (scan ps, then per-candidate
+# `ps eww` to read its env) is O(sessions * processes) and can take
+# seconds on a busy system. We do ONE pass instead: enumerate all
+# PPID==1 processes, read each one's env, extract the
+# CEREBRO_SESSION_ID, group by sid, then kill the ones whose sid is
+# under $CEREBRO_HOME/acp/. The env reads are still per-orphan, but the
+# ps scan is a single pass and the total is O(processes), not
+# O(sessions * processes).
+acp_reap_orphans() {
+  local acp_dir="$CEREBRO_HOME/acp"
+  [[ -d "$acp_dir" ]] || return 0
+  # Collect known session ids into a bash-3-friendly space-separated list.
+  # `local -A` (associative arrays) is bash 4+ and the macOS system bash
+  # is 3.2, so we use a flat string and `case` instead. The sids are
+  # uuid-like (alnum+hyphen) so a leading/trailing space around each
+  # makes the `case "$list" in *" $sid "*` test unambiguous.
+  local known_sids=" "
+  local sid
+  for sid in "$acp_dir"/*/; do
+    [[ -d "$sid" ]] || continue
+    sid="${sid%/}"; sid="${sid##*/}"
+    known_sids+="$sid "
+  done
+  [[ "$known_sids" != " " ]] || return 0
+  # Single ps pass: PPID==1 processes whose command line looks like an
+  # upstream ACP child (opencode acp, claude-agent-acp, or the npx
+  # shim that wraps claude-agent-acp). We pre-filter on a command
+  # substring before paying the `ps eww` cost for the env read -- on a
+  # busy system there can be ~600 PPID==1 processes (every macOS system
+  # service is reparented to launchd), and we only care about the few
+  # that are ours. The cmdline filter is generous on purpose: any
+  # process that doesn't even mention `acp` / `opencode` / `claude`
+  # couldn't be a child of the cerebro acp proxy.
+  local -a to_reap
+  local pid ppid cmdline env_sid
+  while IFS= read -r line; do
+    pid="${line%% *}"; line="${line#"$pid" }"
+    ppid="${line%% *}"; line="${line#"$ppid" }"
+    cmdline="$line"
+    [[ "$ppid" == "1" ]] || continue
+    case "$cmdline" in
+      *acp*|*opencode*|*claude*|*npx*) ;;  # could be one of ours
+      *) continue ;;
+    esac
+    env_sid="$(acp_pid_env_get "$pid" "CEREBRO_SESSION_ID")"
+    [[ -n "$env_sid" ]] || continue
+    case "$known_sids" in
+      *" $env_sid "*) ;;  # known: queue for reaping
+      *) continue ;;
+    esac
+    to_reap+=("$pid:$env_sid")
+  done < <(ps -A -o pid=,ppid=,command= 2>/dev/null | awk '{$1=$1; print}')
+  # Reap. Quiet unless something was found.
+  if (( ${#to_reap[@]} == 0 )); then return 0; fi
+  local reaped=0 entry
+  for entry in "${to_reap[@]}"; do
+    pid="${entry%%:*}"; sid="${entry#*:}"
+    say "cerebro acp: reaping orphan upstream child pid=$pid (session $sid)"
+    kill -TERM "$pid" 2>/dev/null || true
+    local i
+    for i in 1 2 3 4 5; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.2
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    reaped=$((reaped + 1))
+  done
+  if (( reaped > 0 )); then
+    say "cerebro acp: reaped $reaped orphan upstream child(ren)"
+  fi
 }
