@@ -333,6 +333,61 @@ backend_claude_pair_cleanup() {
 # user's own ~/.claude hooks/settings don't interfere; the orchestrator agent
 # itself is read from the session-cwd project dir.
 
+# claude_acp_catalog_env -- emit a JSON object with the ANTHROPIC_DEFAULT_*
+# env vars the Claude SDK reads to REGISTER the user's catalog model ids
+# ($CEREBRO_HOME/models-config.json) with the upstream child. This is
+# id-registration only, not picker presentation: the proxy (acp_server.py)
+# rewrites the editor-facing `model` config option from the catalog, so the
+# SDK's own picker (which carries Anthropic tier labels like "Opus"/"Sonnet")
+# is never shown to the editor. The env vars here just make the SDK accept
+# `set_config_option("model", <catalog id>)` by adding the ids to its
+# internal modelInfos list.
+#
+# The SDK exposes four built-in model slots (OPUS / SONNET / HAIKU / FABLE)
+# plus one ANTHROPIC_CUSTOM_MODEL_OPTION. HAIKU is reserved: the caller
+# already mirrors CEREBRO_MODEL into ANTHROPIC_DEFAULT_HAIKU_MODEL for
+# small/fast background tasks, and we skip it to preserve that invariant.
+# That leaves OPUS, SONNET, FABLE (3 slots) + CUSTOM (1) = 4 catalog ids
+# we can register. Catalog entries past that cap are not registered -- the
+# SDK would reject `set_config_option` for them -- but the orchestrator
+# can still use them via `cerebro <subcmd> --model <id>` (which doesn't go
+# through the SDK's model picker at all).
+#
+# Slot assignment follows catalog order (deterministic; the slot label is
+# invisible to the editor). No _NAME/_DESCRIPTION/_SUPPORTED_CAPABILITIES
+# companions are emitted: those only label the SDK's internal picker,
+# which the editor never sees, so they'd be dead weight. Echoes "{}" when
+# the catalog is missing, empty, or unparseable.
+claude_acp_catalog_env() {
+  local cfg="$CEREBRO_HOME/models-config.json"
+  [[ -r "$cfg" && -s "$cfg" ]] || { printf '%s\n' '{}'; return 0; }
+  jq -e '.models' "$cfg" >/dev/null 2>&1 || { printf '%s\n' '{}'; return 0; }
+  # HAIKU is intentionally absent from this list -- the caller pins it to
+  # CEREBRO_MODEL for small/fast background tasks (see backend_claude_
+  # acp_child_spec), and we don't clobber that with a catalog entry.
+  local -a slots=(OPUS SONNET FABLE)
+  local slot_idx=0 entry id env_obj slot
+  env_obj='{}'
+  while IFS= read -r entry; do
+    id="$(jq -r '.id // empty' <<<"$entry")"
+    [[ -n "$id" ]] || continue
+    if (( slot_idx < 3 )); then
+      slot="${slots[$slot_idx]}"
+      env_obj="$(jq -c --arg slot "$slot" --arg id "$id" \
+          '. + {("ANTHROPIC_DEFAULT_" + $slot + "_MODEL"): $id}' \
+        <<<"$env_obj")"
+    elif (( slot_idx == 3 )); then
+      env_obj="$(jq -c --arg id "$id" \
+          '. + {"ANTHROPIC_CUSTOM_MODEL_OPTION": $id}' \
+        <<<"$env_obj")"
+    else
+      break
+    fi
+    slot_idx=$((slot_idx + 1))
+  done < <(jq -c '.models[]' "$cfg")
+  printf '%s\n' "$env_obj"
+}
+
 # backend_claude_acp_child_spec -- emit the JSON spec acp_server.py consumes
 # to spawn + pin the upstream claude ACP child for one session:
 #   {argv, pin:{config_id,value}, env}
@@ -343,8 +398,12 @@ backend_claude_pair_cleanup() {
 # set it also exports the Anthropic gateway env (mirroring
 # backend_claude_endpoint_env, including pinning ANTHROPIC_MODEL so the gateway
 # serves the configured model) and nulls ANTHROPIC_API_KEY (the proxy unsets a
-# null env value). The proxy adds CEREBRO_SESSION_ID / CEREBRO_SESSION_DIR /
-# CEREBRO_HOME itself.
+# null env value), and merges claude_acp_catalog_env which registers the
+# catalog model ids with the SDK so `set_config_option("model", <id>)` is
+# accepted. The EDITOR-FACING model picker is owned by the proxy
+# (acp_server.py), which rewrites the `model` config option from the catalog
+# -- the env vars here only do id registration, not picker presentation.
+# The proxy adds CEREBRO_SESSION_ID / CEREBRO_SESSION_DIR / CEREBRO_HOME itself.
 backend_claude_acp_child_spec() {
   local argv_bin
   if command -v claude-agent-acp >/dev/null 2>&1; then
@@ -361,6 +420,13 @@ backend_claude_acp_child_spec() {
         '{ANTHROPIC_BASE_URL:$base, ANTHROPIC_AUTH_TOKEN:$tok,
           ANTHROPIC_MODEL:$model, ANTHROPIC_DEFAULT_HAIKU_MODEL:$model,
           ANTHROPIC_API_KEY:null}')"
+    # Register catalog ids with the SDK (id-registration only; the proxy
+    # rewrites the editor-facing picker from the catalog -- see acp_server.py).
+    # HAIKU is reserved (stays pinned to CEREBRO_MODEL above) so the SDK
+    # uses the orchestrator model for small/fast background tasks. A
+    # missing/unparseable catalog returns "{}" and the merge is a no-op.
+    env_json="$(jq -c --argjson cat "$(claude_acp_catalog_env)" \
+        '. + $cat' <<<"$env_json")"
     # Mirror backend_claude_endpoint_env: if the catalog declares contextTokens
     # for the orchestrator model, set the auto-compact window so Claude Code
     # doesn't fall back to 200k for the unrecognized id. Omit the key (rather

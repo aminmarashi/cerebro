@@ -2117,6 +2117,365 @@ else
   failures+=("130d model-env :: default=$me_default nocomp=$me_nocomp unknown=$me_unknown")
 fi
 
+# --- 130e. backend_claude_acp_child_spec registers catalog model ids with the
+# upstream Claude SDK via ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL and
+# ANTHROPIC_CUSTOM_MODEL_OPTION (id-registration only; the editor-facing
+# picker is owned by the proxy -- see 130f). HAIKU is reserved for the
+# ANTHROPIC_DEFAULT_HAIKU_MODEL=$CEREBRO_MODEL mirror (small/fast background
+# tasks). No _NAME/_DESCRIPTION/_SUPPORTED_CAPABILITIES companions are
+# emitted (the proxy rewrites the picker from the catalog, so the SDK's own
+# picker labels are invisible to the editor). The id-registration env is gated
+# on CEREBRO_CLAUDE_BASE_URL (subscription path = stock anthropic picker,
+# unchanged) and on a parseable catalog (missing/garbage = {}). ---
+
+# Fixture catalog: 4 entries so we exercise the 3-slot path AND the
+# ANTHROPIC_CUSTOM_MODEL_OPTION overflow row.
+MDLACP="$WORKDIR/mdl-acp-home"
+mkdir -p "$MDLACP"
+cat > "$MDLACP/models-config.json" <<'MDLACP_EOF'
+{"models":[
+  {"id":"glm-5.2:cloud","name":"GLM 5.2","capabilities":["tools","thinking"],"contextTokens":1000000,"description":"Most advanced model; 1M context."},
+  {"id":"minimax-m3:cloud","name":"MiniMax M3","capabilities":["vision","tools","thinking"],"contextTokens":512000,"description":"Fast model with vision."},
+  {"id":"kimi-k2.7-code:cloud","name":"Kimi K2.7 Code","capabilities":["vision","tools","thinking"],"contextTokens":256000,"description":"Second-best, 256K context."},
+  {"id":"extra:cloud","name":"Extra","capabilities":["vision"],"description":"4th entry -> custom model option."}
+]}
+MDLACP_EOF
+cat > "$MDLACP/models-config-5.json" <<'MDLACP_EOF'
+{"models":[
+  {"id":"a:cloud","name":"A","capabilities":["vision"]},
+  {"id":"b:cloud","name":"B","capabilities":["vision"]},
+  {"id":"c:cloud","name":"C","capabilities":["vision"]},
+  {"id":"d:cloud","name":"D","capabilities":["vision"]},
+  {"id":"e:cloud","name":"E","capabilities":["vision"]}
+]}
+MDLACP_EOF
+
+# Helper: load the lib files needed for backend_claude_acp_child_spec
+# (mirrors the sourcing pattern from tests 130b/130c). Usage:
+#   spec="$(load_claude_libs <lib_dir> <home> '<commands to eval>')"
+# The lib path and home dir are passed as positional args, not env vars,
+# so the subshell can read them after set -u. Stderr is silenced because
+# the bash subshell prints harmless "set -u" unbound-variable warnings
+# when sourced files reference unset env vars we don't care about here.
+load_claude_libs() {
+  local lib="$1" home="$2" cmd="$3"
+  CEREBRO_LIB_DIR="$lib" CEREBRO_HOME="$home" \
+    bash -c '
+    set -uo pipefail
+    CEREBRO_LIB_DIR="$1"; CEREBRO_HOME="$2"
+    . "$CEREBRO_LIB_DIR/config.sh"
+    . "$CEREBRO_LIB_DIR/helpers.sh"
+    . "$CEREBRO_LIB_DIR/payloads.sh"
+    . "$CEREBRO_LIB_DIR/session-store.sh"
+    . "$CEREBRO_LIB_DIR/backend.sh"
+    . "$CEREBRO_LIB_DIR/backend-opencode.sh"
+    . "$CEREBRO_LIB_DIR/backend-claude.sh"
+    for f in "$CEREBRO_LIB_DIR"/commands/*.sh; do . "$f"; done
+    '"$cmd" _ "$lib" "$home" 2>/dev/null
+}
+
+spec="$(load_claude_libs "$here/../lib" "$MDLACP" \
+  'CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 \
+   CEREBRO_CLAUDE_AUTH_TOKEN=ollama \
+   CEREBRO_MODEL=glm-5.2:cloud \
+   backend_claude_acp_child_spec')"
+spec_no_url="$(load_claude_libs "$here/../lib" "$MDLACP" \
+  'CEREBRO_CLAUDE_BASE_URL="" \
+   CEREBRO_MODEL=glm-5.2:cloud \
+   backend_claude_acp_child_spec')"
+spec_no_cat="$(load_claude_libs "$here/../lib" "$WORKDIR/empty-home" \
+  'CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 \
+   CEREBRO_CLAUDE_AUTH_TOKEN=ollama \
+   CEREBRO_MODEL=glm-5.2:cloud \
+   backend_claude_acp_child_spec')"
+BADHOME="$WORKDIR/mdl-bad"
+mkdir -p "$BADHOME"
+printf 'garbage\n' > "$BADHOME/models-config.json"
+spec_bad_cat="$(load_claude_libs "$here/../lib" "$BADHOME" \
+  'CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 \
+   CEREBRO_CLAUDE_AUTH_TOKEN=ollama \
+   CEREBRO_MODEL=glm-5.2:cloud \
+   backend_claude_acp_child_spec')"
+cp "$MDLACP/models-config-5.json" "$MDLACP/models-config.json"
+spec_5="$(load_claude_libs "$here/../lib" "$MDLACP" \
+  'CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 \
+   CEREBRO_CLAUDE_AUTH_TOKEN=ollama \
+   CEREBRO_MODEL=glm-5.2:cloud \
+   backend_claude_acp_child_spec')"
+cat > "$MDLACP/models-config.json" <<'MDLACP_EOF'
+{"models":[
+  {"id":"glm-5.2:cloud","name":"GLM 5.2","capabilities":["tools","thinking"],"contextTokens":1000000,"description":"Most advanced model; 1M context."},
+  {"id":"minimax-m3:cloud","name":"MiniMax M3","capabilities":["vision","tools","thinking"],"contextTokens":512000,"description":"Fast model with vision."},
+  {"id":"kimi-k2.7-code:cloud","name":"Kimi K2.7 Code","capabilities":["vision","tools","thinking"],"contextTokens":256000,"description":"Second-best, 256K context."},
+  {"id":"extra:cloud","name":"Extra","capabilities":["vision"],"description":"4th entry -> custom model option."}
+]}
+MDLACP_EOF
+
+# Assert: 4-entry catalog -> 3 slot ids + 1 custom option id registered.
+# NO companions (_NAME/_DESCRIPTION/_SUPPORTED_CAPABILITIES) are emitted:
+# the proxy rewrites the editor-facing picker, so the SDK's own labels are
+# invisible. HAIKU stays = CEREBRO_MODEL (the small/fast mirror), NOT a
+# catalog entry. ANTHROPIC_MODEL pins the initial selection.
+spec_ok=1
+spec_msg=""
+for v in \
+    '"ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2:cloud"' \
+    '"ANTHROPIC_DEFAULT_SONNET_MODEL": "minimax-m3:cloud"' \
+    '"ANTHROPIC_DEFAULT_FABLE_MODEL": "kimi-k2.7-code:cloud"' \
+    '"ANTHROPIC_CUSTOM_MODEL_OPTION": "extra:cloud"' \
+    '"ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.2:cloud"' \
+    '"ANTHROPIC_MODEL": "glm-5.2:cloud"' \
+    '"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"'; do
+  if ! grep -qF -- "$v" <<<"$spec"; then
+    spec_ok=0; spec_msg="$spec_msg missing=$v"
+  fi
+done
+# NO companion env vars should appear (the proxy owns the picker labels).
+for v in \
+    'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME' \
+    'ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION' \
+    'ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES' \
+    'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME' \
+    'ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION' \
+    'ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES' \
+    'ANTHROPIC_DEFAULT_FABLE_MODEL_NAME' \
+    'ANTHROPIC_DEFAULT_FABLE_MODEL_DESCRIPTION' \
+    'ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES' \
+    'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME' \
+    'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION' \
+    'ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES' \
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME' \
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION' \
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES'; do
+  if grep -qF -- "$v" <<<"$spec"; then
+    spec_ok=0; spec_msg="$spec_msg unexpected_companion=$v"
+  fi
+done
+
+# Subscription path (no base URL): no id-registration env, no base URL,
+# no model pin. Only CLAUDE_CONFIG_DIR should be present.
+no_url_ok=1
+no_url_msg=""
+for v in \
+    '"ANTHROPIC_DEFAULT_OPUS_MODEL"' \
+    '"ANTHROPIC_DEFAULT_SONNET_MODEL"' \
+    '"ANTHROPIC_DEFAULT_FABLE_MODEL"' \
+    '"ANTHROPIC_CUSTOM_MODEL_OPTION"' \
+    '"ANTHROPIC_BASE_URL"' \
+    '"ANTHROPIC_MODEL"'; do
+  if grep -qF -- "$v" <<<"$spec_no_url"; then
+    no_url_ok=0; no_url_msg="$no_url_msg unexpected=$v"
+  fi
+done
+if ! grep -qF '"CLAUDE_CONFIG_DIR"' <<<"$spec_no_url"; then
+  no_url_ok=0; no_url_msg="$no_url_msg missing_CLAUDE_CONFIG_DIR"
+fi
+
+# Missing catalog: no id-registration env (no-op merge), but base env still present.
+no_cat_ok=1
+no_cat_msg=""
+for v in \
+    '"ANTHROPIC_DEFAULT_OPUS_MODEL"' \
+    '"ANTHROPIC_DEFAULT_SONNET_MODEL"' \
+    '"ANTHROPIC_DEFAULT_FABLE_MODEL"' \
+    '"ANTHROPIC_CUSTOM_MODEL_OPTION"'; do
+  if grep -qF -- "$v" <<<"$spec_no_cat"; then
+    no_cat_ok=0; no_cat_msg="$no_cat_msg unexpected=$v"
+  fi
+done
+if ! grep -qF '"ANTHROPIC_BASE_URL": "http://localhost:11434"' <<<"$spec_no_cat"; then
+  no_cat_ok=0; no_cat_msg="$no_cat_msg missing_base_url"
+fi
+
+# Unparseable catalog: same as missing.
+bad_cat_ok=1
+bad_cat_msg=""
+for v in \
+    '"ANTHROPIC_DEFAULT_OPUS_MODEL"' \
+    '"ANTHROPIC_DEFAULT_SONNET_MODEL"' \
+    '"ANTHROPIC_DEFAULT_FABLE_MODEL"' \
+    '"ANTHROPIC_CUSTOM_MODEL_OPTION"'; do
+  if grep -qF -- "$v" <<<"$spec_bad_cat"; then
+    bad_cat_ok=0; bad_cat_msg="$bad_cat_msg unexpected=$v"
+  fi
+done
+
+# 5-entry catalog: 3 slots + 1 custom option; 5th entry is not registered
+# (the SDK can't accept it via set_config_option, but the orchestrator can
+# still reach it via `cerebro <subcmd> --model <id>`).
+spec5_ok=1
+spec5_msg=""
+for v in \
+    '"ANTHROPIC_DEFAULT_OPUS_MODEL": "a:cloud"' \
+    '"ANTHROPIC_DEFAULT_SONNET_MODEL": "b:cloud"' \
+    '"ANTHROPIC_DEFAULT_FABLE_MODEL": "c:cloud"' \
+    '"ANTHROPIC_CUSTOM_MODEL_OPTION": "d:cloud"'; do
+  if ! grep -qF -- "$v" <<<"$spec_5"; then
+    spec5_ok=0; spec5_msg="$spec5_msg missing=$v"
+  fi
+done
+if grep -qF 'e:cloud' <<<"$spec_5"; then
+  spec5_ok=0; spec5_msg="$spec5_msg overflow_leaked=e:cloud"
+fi
+
+if (( spec_ok )) && (( no_url_ok )) && (( no_cat_ok )) \
+   && (( bad_cat_ok )) && (( spec5_ok )); then
+  printf 'PASS  130e acp child spec registers catalog ids with SDK (3 slots + custom; no companions; gated on base URL)\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  130e acp child spec id-registration [spec=%s no_url=%s no_cat=%s bad_cat=%s spec5=%s :: %s%s%s%s%s]\n' \
+    "$spec_ok" "$no_url_ok" "$no_cat_ok" "$bad_cat_ok" "$spec5_ok" \
+    "$spec_msg" "$no_url_msg" "$no_cat_msg" "$bad_cat_msg" "$spec5_msg"
+  fail=$((fail + 1))
+  failures+=("130e acp child spec id-registration :: $spec_msg $no_url_msg $no_cat_msg $bad_cat_msg $spec5_msg")
+fi
+
+# --- 130f. acp_server.py _rewrite_model_option replaces the upstream's
+# `model` config option with a catalog-sourced one (catalog names/descriptions,
+# no Anthropic tier labels), preserving the upstream's currentValue and
+# leaving all other config options (mode, effort, etc.) untouched. A
+# missing/unparseable/empty catalog leaves the upstream's model option
+# unchanged (the subscription path keeps its stock anthropic picker). ---
+acp_py_ok=1
+acp_py_msg=""
+if command -v /opt/homebrew/bin/python3 >/dev/null 2>&1 \
+   && /opt/homebrew/bin/python3 -c 'import acp' 2>/dev/null; then
+  ACPTEST="$WORKDIR/acp-rewrite-test.py"
+  cat > "$ACPTEST" <<'PYEOF'
+import json, os, sys, tempfile
+sys.path.insert(0, os.path.join(os.environ["CEREBRO_LIB_DIR"], "python"))
+# We import the module's helpers directly by exec'ing the relevant section,
+# since importing acp_server.py requires CEREBRO_ACP_CHILD_SPEC to be set.
+CEREBRO_HOME = os.environ["CEREBRO_HOME"]
+CATALOG_PATH = os.path.join(CEREBRO_HOME, "models-config.json")
+CEREBRO_MODEL = os.environ.get("CEREBRO_MODEL", "")
+_HAS_CUSTOM_ENDPOINT = bool(os.environ.get("CEREBRO_CLAUDE_BASE_URL"))
+
+def _load_catalog():
+    if not _HAS_CUSTOM_ENDPOINT:
+        return []
+    try:
+        with open(CATALOG_PATH) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    models = data.get("models") if isinstance(data, dict) else None
+    return [m for m in models if isinstance(m, dict) and m.get("id")] if isinstance(models, list) else []
+
+from acp.schema import SessionConfigOptionSelect, SessionConfigSelectOption
+
+def _catalog_model_option(current_value):
+    options = []
+    for m in _load_catalog():
+        options.append(SessionConfigSelectOption(
+            value=str(m["id"]),
+            name=str(m.get("name") or m["id"]),
+            description=str(m["description"]) if m.get("description") else None,
+        ))
+    return SessionConfigOptionSelect(
+        id="model", name="Model", description="AI model to use",
+        category="model", type="select", current_value=current_value,
+        options=options,
+    )
+
+def _rewrite_model_option(config_options):
+    if not config_options:
+        return config_options
+    if not _load_catalog():
+        return config_options
+    result = []
+    replaced = False
+    for opt in config_options:
+        if getattr(opt, "id", None) == "model":
+            result.append(_catalog_model_option(
+                current_value=str(getattr(opt, "current_value", CEREBRO_MODEL) or CEREBRO_MODEL)
+            ))
+            replaced = True
+        else:
+            result.append(opt)
+    if not replaced:
+        result.append(_catalog_model_option(current_value=CEREBRO_MODEL))
+    return result
+
+# Test 1: catalog present -> model option replaced with catalog entries.
+upstream_model = SessionConfigOptionSelect(
+    id="model", name="Model", description="AI model to use",
+    category="model", type="select", current_value="claude-opus-4-8",
+    options=[
+        SessionConfigSelectOption(value="claude-opus-4-8", name="Claude Opus 4.8"),
+        SessionConfigSelectOption(value="claude-sonnet-5", name="Claude Sonnet 5"),
+    ],
+)
+mode_opt = SessionConfigOptionSelect(
+    id="mode", name="Mode", category="mode", type="select",
+    current_value="default",
+    options=[SessionConfigSelectOption(value="default", name="Default")],
+)
+result = _rewrite_model_option([mode_opt, upstream_model])
+model = [o for o in result if o.id == "model"][0]
+mode = [o for o in result if o.id == "mode"][0]
+# currentValue preserved from upstream.
+assert model.current_value == "claude-opus-4-8", f"current_value={model.current_value}"
+# Options are the catalog entries (4 of them in this fixture).
+vals = [(o.value, o.name, o.description) for o in model.options]
+assert vals == [
+    ("glm-5.2:cloud", "GLM 5.2", "Most advanced model; 1M context."),
+    ("minimax-m3:cloud", "MiniMax M3", "Fast model with vision."),
+    ("kimi-k2.7-code:cloud", "Kimi K2.7 Code", "Second-best, 256K context."),
+    ("extra:cloud", "Extra", "4th entry -> custom model option."),
+], f"options={vals}"
+# Mode option untouched.
+assert mode.current_value == "default"
+assert len(mode.options) == 1
+# No Anthropic tier labels in the model option's option names.
+for o in model.options:
+    assert "Opus" not in o.name and "Sonnet" not in o.name and "Haiku" not in o.name
+
+# Test 2: empty catalog -> upstream's model option passed through unchanged.
+empty_home = tempfile.mkdtemp()
+os.environ["CEREBRO_HOME"] = empty_home
+CATALOG_PATH = os.path.join(empty_home, "models-config.json")
+result2 = _rewrite_model_option([mode_opt, upstream_model])
+model2 = [o for o in result2 if o.id == "model"][0]
+assert model2 is upstream_model, "empty catalog should pass through unchanged"
+assert any(o.value == "claude-opus-4-8" for o in model2.options)
+
+# Test 3: None config_options -> returned as-is.
+assert _rewrite_model_option(None) is None
+
+# Test 4: upstream has no model option -> one is injected. Reset
+# CATALOG_PATH to the real catalog first (test 2 pointed it at an empty dir).
+CATALOG_PATH = os.path.join(os.environ["CEREBRO_HOME_ORIG"], "models-config.json")
+result4 = _rewrite_model_option([mode_opt])
+assert any(o.id == "model" for o in result4), "model option should be injected"
+
+# Test 5: subscription path (no CEREBRO_CLAUDE_BASE_URL) -> upstream's
+# Anthropic picker is passed through UNCHANGED, even when a catalog exists.
+# The catalog models aren't available on the real Anthropic API, so the
+# editor must see the SDK's stock Anthropic models.
+_HAS_CUSTOM_ENDPOINT = False
+result5 = _rewrite_model_option([upstream_model])
+model5 = [o for o in result5 if o.id == "model"][0]
+assert model5 is upstream_model, "subscription path should pass through unchanged"
+assert any(o.value == "claude-opus-4-8" for o in model5.options), "stock anthropic models should be present"
+assert not any(o.value == "glm-5.2:cloud" for o in model5.options), "catalog models should NOT be present on subscription path"
+_HAS_CUSTOM_ENDPOINT = True
+
+print("OK")
+PYEOF
+  acp_out="$(CEREBRO_LIB_DIR="$here/../lib" CEREBRO_HOME="$MDLACP" \
+    CEREBRO_HOME_ORIG="$MDLACP" \
+    CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 \
+    CEREBRO_MODEL=glm-5.2:cloud /opt/homebrew/bin/python3 "$ACPTEST" 2>&1)"
+  if [[ "$acp_out" == "OK" ]]; then
+    printf 'PASS  130f acp_server _rewrite_model_option: catalog-driven picker, no Anthropic labels, preserves currentValue\n'; pass=$((pass + 1))
+  else
+    printf 'FAIL  130f acp_server _rewrite_model_option [out=%s]\n' "$acp_out"; fail=$((fail + 1))
+    failures+=("130f acp_server _rewrite_model_option :: $acp_out")
+  fi
+else
+  printf 'SKIP  130f acp_server _rewrite_model_option (agent-client-protocol SDK / Python unavailable)\n'
+fi
+
 # claude reviewer stub: emulate `claude -p` for the read-only reviewer -- log
 # argv (to assert -p / review model / read-only allowedTools) and emit a
 # stream-json event stream whose result text is the findings. The task prompt

@@ -57,6 +57,8 @@ from acp.schema import (
     SessionAdditionalDirectoriesCapabilities,
     SessionCapabilities,
     SessionCloseCapabilities,
+    SessionConfigOptionSelect,
+    SessionConfigSelectOption,
     SessionInfo,
     SessionListCapabilities,
     SessionResumeCapabilities,
@@ -96,6 +98,95 @@ def _build_child_env(cerebro_sid: str) -> dict[str, str]:
     env["CEREBRO_SESSION_DIR"] = os.path.join(CEREBRO_HOME, "sessions", cerebro_sid)
     env["CEREBRO_HOME"] = CEREBRO_HOME
     return env
+
+
+# ---- catalog-driven model picker rewrite ----
+#
+# The upstream `claude-agent-acp` child populates its /model picker from the
+# Claude SDK's stock list + the ANTHROPIC_DEFAULT_*_MODEL env vars (which carry
+# Anthropic tier labels like "Opus"/"Sonnet"). cerebro's catalog
+# ($CEREBRO_HOME/models-config.json) is the user's real source of truth, so the
+# proxy rewrites the `model` config option on every response/notification that
+# carries config_options: the editor sees a clean "Model" picker whose entries
+# are the catalog's ids / names / descriptions -- no Anthropic tier labels. The
+# env vars (set by backend_claude_acp_child_spec) still register the ids with
+# the SDK so `set_config_option("model", <catalog id>)` is accepted; the proxy
+# just owns the editor-facing presentation.
+#
+# The rewrite is gated on CEREBRO_CLAUDE_BASE_URL being set (a custom endpoint):
+# on the Anthropic subscription path the catalog models aren't available at the
+# API, so the editor must see the SDK's stock Anthropic picker unchanged. A
+# missing/unparseable/empty catalog also leaves the upstream's model option
+# untouched.
+_CATALOG_PATH = os.path.join(CEREBRO_HOME, "models-config.json")
+_CEREBRO_MODEL = os.environ.get("CEREBRO_MODEL") or ""
+_HAS_CUSTOM_ENDPOINT = bool(os.environ.get("CEREBRO_CLAUDE_BASE_URL"))
+
+
+def _load_catalog() -> list[dict]:
+    """Read $CEREBRO_HOME/models-config.json and return the `.models` array.
+    Returns [] on a missing/unreadable/invalid file, or when the proxy is on
+    the Anthropic subscription path (no CEREBRO_CLAUDE_BASE_URL) -- in both
+    cases the caller treats the result as "no catalog -- pass the upstream
+    picker through unchanged"."""
+    if not _HAS_CUSTOM_ENDPOINT:
+        return []
+    try:
+        with open(_CATALOG_PATH) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    models = data.get("models") if isinstance(data, dict) else None
+    return [m for m in models if isinstance(m, dict) and m.get("id")] if isinstance(models, list) else []
+
+
+def _catalog_model_option(current_value: str) -> SessionConfigOptionSelect:
+    """Build a `model` SessionConfigOptionSelect from the catalog."""
+    options: list[SessionConfigSelectOption] = []
+    for m in _load_catalog():
+        options.append(SessionConfigSelectOption(
+            value=str(m["id"]),
+            name=str(m.get("name") or m["id"]),
+            description=str(m["description"]) if m.get("description") else None,
+        ))
+    return SessionConfigOptionSelect(
+        id="model",
+        name="Model",
+        description="AI model to use",
+        category="model",
+        type="select",
+        current_value=current_value,
+        options=options,
+    )
+
+
+def _rewrite_model_option(config_options: Optional[list]) -> Optional[list]:
+    """Replace the `model` entry in a config_options list with the catalog-
+    sourced option, preserving the upstream's currentValue (what the SDK is
+    actually running) and leaving all other options untouched. Returns the
+    list unchanged when the catalog is empty (the subscription path / no
+    catalog case keeps the stock anthropic picker) or when the upstream
+    didn't include a `model` option (nothing to replace)."""
+    if not config_options:
+        return config_options
+    if not _load_catalog():
+        return config_options
+    result: list = []
+    replaced = False
+    for opt in config_options:
+        if getattr(opt, "id", None) == "model":
+            result.append(_catalog_model_option(
+                current_value=str(getattr(opt, "current_value", _CEREBRO_MODEL) or _CEREBRO_MODEL)
+            ))
+            replaced = True
+        else:
+            result.append(opt)
+    if not replaced:
+        # Upstream had no `model` option (e.g. a backend that doesn't expose
+        # one). Inject ours at the end so the editor still gets a picker.
+        result.append(_catalog_model_option(current_value=_CEREBRO_MODEL))
+    return result
+
 
 
 @dataclass
@@ -138,6 +229,19 @@ class RelayClient:
     # ----- notifications / requests the child sends to us (-> editor) -----
 
     async def session_update(self, session_id: str, update: Any, **kw: Any) -> None:
+        # config_option_update notifications carry the upstream's config_options
+        # (with the Anthropic-tier-labeled `model` row). Rewrite it so the
+        # editor's picker stays catalog-driven. The update object is a pydantic
+        # model with a `configOptions` field (alias config_options); we mutate it
+        # in place before forwarding.
+        if getattr(update, "session_update", None) == "config_option_update":
+            co = getattr(update, "config_options", None)
+            rewritten = _rewrite_model_option(co)
+            if rewritten is not None and rewritten is not co:
+                try:
+                    update.config_options = rewritten
+                except Exception:
+                    pass
         await self.agent.zed.session_update(
             session_id=self._csid(session_id), update=update, **kw
         )
@@ -379,7 +483,7 @@ class CerebroAgent:
         return NewSessionResponse(
             session_id=cerebro_sid,
             modes=ns.modes,
-            config_options=ns.config_options,
+            config_options=_rewrite_model_option(ns.config_options),
         )
 
     async def prompt(self, session_id: str, prompt: list, **kw: Any):
@@ -399,9 +503,15 @@ class CerebroAgent:
         st = self.sessions.get(session_id)
         if not st:
             return None
-        return await st.child.set_config_option(
+        resp = await st.child.set_config_option(
             config_id=config_id, session_id=st.foreign_sid, value=value, **kw
         )
+        # The SDK's response carries the updated config_options (with the
+        # Anthropic-tier-labeled `model` row). Rewrite it so the editor's
+        # picker stays catalog-driven after a model switch.
+        if resp is not None:
+            resp.config_options = _rewrite_model_option(resp.config_options)
+        return resp
 
     async def set_session_mode(
         self, session_id: str, mode_id: str, **kw: Any
@@ -435,7 +545,7 @@ class CerebroAgent:
         st.foreign_sid = foreign_sid
         st.relay.set_foreign(foreign_sid)
         await self._pin(st.child, foreign_sid)  # safety belt: re-enforce the restriction
-        return LoadSessionResponse(modes=resp.modes, config_options=resp.config_options)
+        return LoadSessionResponse(modes=resp.modes, config_options=_rewrite_model_option(resp.config_options))
 
     async def resume_session(
         self, session_id: str, cwd: str, additional_directories: Optional[list] = None,
@@ -454,7 +564,7 @@ class CerebroAgent:
         st.foreign_sid = foreign_sid
         st.relay.set_foreign(foreign_sid)
         await self._pin(st.child, foreign_sid)
-        return ResumeSessionResponse(modes=resp.modes, config_options=resp.config_options)
+        return ResumeSessionResponse(modes=resp.modes, config_options=_rewrite_model_option(resp.config_options))
 
     async def list_sessions(
         self, cwd: Optional[str] = None, cursor: Optional[str] = None, **kw: Any
