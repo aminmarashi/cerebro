@@ -3341,6 +3341,120 @@ else
   printf 'SKIP  177  ACP relay (agent-client-protocol SDK / Python >=3.10 unavailable)\n'
 fi
 
+# ========================================================================
+# 178-180. `cerebro acp restart`: signal the running ACP proxy (for this
+# CEREBRO_HOME) to exit so the editor respawns it and the new session picks
+# up fresh config. Tests do NOT spawn a real acp_server.py (the agent-
+# client-protocol Python SDK isn't always available); they stand in a
+# long-lived python `time.sleep` with `acp_server.py` in argv and the
+# desired CEREBRO_HOME in env, which is what cmd_acp_restart's discovery
+# (`acp_running_proxy_pids` + `acp_proxy_env_home`) actually keys on.
+# `bin/cerebro` is invoked with the test's isolated CEREBRO_HOME (set in
+# the harness preamble) so the discovery filter targets that home.
+# ========================================================================
+
+# --- 178. no proxy running -> "nothing to do", exit 0 ---
+restart_out="$("$CEREBRO_BIN" acp restart 2>&1)"
+restart_rc=$?
+if (( restart_rc == 0 )) && [[ "$restart_out" == *"no running proxy"* ]]; then
+  printf 'PASS  178  acp restart with no proxy -> exit 0 + "no running proxy"\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  178  acp restart no proxy [rc=%d out=%s]\n' "$restart_rc" "$restart_out"; fail=$((fail + 1))
+  failures+=("178 acp restart no proxy :: rc=$restart_rc out=$restart_out")
+fi
+
+# --- 179. one fake proxy with matching CEREBRO_HOME -> killed ---
+# Stand-in process: a python `time.sleep` whose argv contains `acp_server.py`
+# (so `acp_running_proxy_pids` matches) and whose env has CEREBRO_HOME equal
+# to the test's isolated home (so the env filter matches). The harness sets
+# CEREBRO_HOME for us at the top of the file.
+CEREBRO_HOME="$CEREBRO_HOME" python3 -c 'import time; time.sleep(60)' acp_server.py \
+  >/dev/null 2>&1 &
+FAKE_PROXY_PID=$!
+# Give the child a moment to register as a ps-visible process.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 "$FAKE_PROXY_PID" 2>/dev/null && ps -A -o pid= -p "$FAKE_PROXY_PID" >/dev/null 2>&1 && break
+  sleep 0.1
+done
+if ! kill -0 "$FAKE_PROXY_PID" 2>/dev/null; then
+  printf 'SKIP  179  acp restart kills proxy (fake proxy failed to start)\n'
+elif ! command -v ps >/dev/null 2>&1; then
+  kill "$FAKE_PROXY_PID" 2>/dev/null; wait "$FAKE_PROXY_PID" 2>/dev/null
+  printf 'SKIP  179  acp restart kills proxy (ps not available)\n'
+else
+  restart_out="$("$CEREBRO_BIN" acp restart 2>&1)"
+  restart_rc=$?
+  # Allow up to 3s for SIGTERM -> process exit.
+  gone=0
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    kill -0 "$FAKE_PROXY_PID" 2>/dev/null || { gone=1; break; }
+    sleep 0.2
+  done
+  wait "$FAKE_PROXY_PID" 2>/dev/null
+  if (( restart_rc == 0 )) && (( gone == 1 )) \
+     && [[ "$restart_out" == *"restarting proxy pid=$FAKE_PROXY_PID"* ]] \
+     && [[ "$restart_out" == *"stopped"* ]]; then
+    printf 'PASS  179  acp restart kills the matching proxy\n'; pass=$((pass + 1))
+  else
+    printf 'FAIL  179  acp restart kills proxy [rc=%d gone=%d out=%s]\n' "$restart_rc" "$gone" "$restart_out"; fail=$((fail + 1))
+    failures+=("179 acp restart kills proxy :: rc=$restart_rc gone=$gone out=$restart_out")
+    kill -KILL "$FAKE_PROXY_PID" 2>/dev/null; wait "$FAKE_PROXY_PID" 2>/dev/null
+  fi
+fi
+
+# --- 180. fake proxy with a DIFFERENT CEREBRO_HOME -> ignored, left alive ---
+OTHER_HOME="$WORKDIR/other-home"
+mkdir -p "$OTHER_HOME"
+CEREBRO_HOME="$OTHER_HOME" python3 -c 'import time; time.sleep(30)' acp_server.py \
+  >/dev/null 2>&1 &
+OTHER_PROXY_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 "$OTHER_PROXY_PID" 2>/dev/null && ps -A -o pid= -p "$OTHER_PROXY_PID" >/dev/null 2>&1 && break
+  sleep 0.1
+done
+if ! kill -0 "$OTHER_PROXY_PID" 2>/dev/null; then
+  printf 'SKIP  180  acp restart ignores other CEREBRO_HOME (fake proxy failed to start)\n'
+else
+  restart_out="$("$CEREBRO_BIN" acp restart 2>&1)"
+  restart_rc=$?
+  other_alive=0
+  kill -0 "$OTHER_PROXY_PID" 2>/dev/null && other_alive=1
+  # Cleanup: kill the other-home proxy.
+  kill -KILL "$OTHER_PROXY_PID" 2>/dev/null; wait "$OTHER_PROXY_PID" 2>/dev/null
+  if (( restart_rc == 0 )) && (( other_alive == 1 )) \
+     && [[ "$restart_out" == *"no running proxy"* ]]; then
+    printf 'PASS  180  acp restart ignores proxies for a different CEREBRO_HOME\n'; pass=$((pass + 1))
+  else
+    printf 'FAIL  180  acp restart ignores other CEREBRO_HOME [rc=%d other_alive=%d out=%s]\n' "$restart_rc" "$other_alive" "$restart_out"; fail=$((fail + 1))
+    failures+=("180 acp restart other home :: rc=$restart_rc other_alive=$other_alive out=$restart_out")
+  fi
+fi
+
+# --- 181. unknown `cerebro acp` subcommand -> die, no proxy started ---
+bogus_out="$("$CEREBRO_BIN" acp bogus 2>&1)"
+bogus_rc=$?
+if (( bogus_rc != 0 )) && [[ "$bogus_out" == *"unknown subcommand"* ]]; then
+  printf 'PASS  181  acp rejects unknown subcommand (no proxy started)\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  181  acp bogus [rc=%d out=%s]\n' "$bogus_rc" "$bogus_out"; fail=$((fail + 1))
+  failures+=("181 acp bogus :: rc=$bogus_rc out=$bogus_out")
+fi
+
+# --- 182. `cerebro acp-mint` and `cerebro acp-set-foreign` (legacy top-level
+# forms) are no longer recognised: they should fall through to
+# "unknown subcommand". The internal mint/set-foreign are reachable as
+# `cerebro acp mint` and `cerebro acp set-foreign`.
+for legacy in "acp-mint" "acp-set-foreign"; do
+  leg_out="$("$CEREBRO_BIN" "$legacy" 2>&1)"
+  leg_rc=$?
+  if (( leg_rc != 0 )) && [[ "$leg_out" == *"unknown subcommand"* ]]; then
+    printf 'PASS  182  legacy `%s` rejected (use `cerebro acp %s`)\n' "$legacy" "${legacy#acp-}"; pass=$((pass + 1))
+  else
+    printf 'FAIL  182  legacy `%s` [rc=%d out=%s]\n' "$legacy" "$leg_rc" "$leg_out"; fail=$((fail + 1))
+    failures+=("182 legacy $legacy :: rc=$leg_rc out=$leg_out")
+  fi
+done
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 if (( fail > 0 )); then
   printf '\nFailures:\n'

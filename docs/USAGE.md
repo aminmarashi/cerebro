@@ -185,6 +185,21 @@ the `cerebro execute` child binds to the session (visible in `cerebro list`),
 opens its PR, and reports back through the editor. Restart Zed and resume the
 thread — the upstream conversation reopens.
 
+### Restart the proxy after a config change
+
+`cerebro acp` reads `$CEREBRO_HOME/config.json` and the `CEREBRO_*` env vars
+once at startup, then reuses the resolved values for the lifetime of the
+proxy (and for every per-session upstream child it spawns). To pick up a
+config change without restarting the editor, run
+
+```bash
+cerebro acp restart
+```
+
+This signals the running proxy (for your current `CEREBRO_HOME`) to exit;
+the editor respawns `cerebro acp` and the next session materialises with
+fresh config. Idempotent — a no-op when no proxy is running.
+
 ### Backends and dependencies
 
 * **opencode (default):** uses `opencode acp`. No extra deps beyond cerebro's

@@ -1,6 +1,12 @@
 # cerebro lib: commands/acp
-# subcommands: acp (external) + acp-mint / acp-set-foreign (internal, called by
-# the python ACP server via `cerebro <name>`).
+# subcommands under `cerebro acp`:
+#   (default)        -- start the proxy (external, invoked by the editor)
+#   restart          -- signal a running proxy to exit so the editor respawns
+#                       it and the new session picks up fresh config
+#   mint             -- INTERNAL: called by lib/python/acp_server.py per
+#                       session/new to mint a cerebro session
+#   set-foreign      -- INTERNAL: called by the python server to record the
+#                       upstream child's session id in cerebro metadata
 # Sourced by bin/cerebro; not meant to be executed directly.
 
 # `cerebro acp` is the ACP (Agent Client Protocol) front-end for editors like
@@ -60,8 +66,16 @@ acp_require_python_deps() {
 # tree once (so cerebro subcommands the orchestrator spawns find their agents),
 # build + export the upstream child spec (JSON: argv + pin + env, backend-fixed),
 # then exec the python server. The server reads CEREBRO_ACP_CHILD_SPEC and
-# shells out to `cerebro acp-mint` / `cerebro acp-set-foreign` per session.
+# shells out to `cerebro acp mint` / `cerebro acp set-foreign` per session.
 cmd_acp() {
+  case "${1:-}" in
+    restart)     shift; cmd_acp_restart     "$@" ; return $? ;;
+    # internal: called by lib/python/acp_server.py over `cerebro acp <name>`
+    mint)        shift; cmd_acp_mint        "$@" ; return $? ;;
+    set-foreign) shift; cmd_acp_set_foreign "$@" ; return $? ;;
+    "")      ;;
+    *)       die "cerebro acp: unknown subcommand: $1 (try: cerebro acp restart)" ;;
+  esac
   require_deps
   acp_require_python_deps
   materialise_home
@@ -120,4 +134,85 @@ cmd_acp_set_foreign() {
   sess_dir="$CEREBRO_HOME/sessions/$sid"
   [[ -d "$sess_dir" ]] || die "acp-set-foreign: no such session: $sid"
   set_metadata_foreign "$sess_dir" "$foreign"
+}
+
+# cmd_acp_restart -- signal the running `cerebro acp` proxy (for this
+# CEREBRO_HOME) to exit, so the editor respawns it and the new session
+# picks up the fresh $CEREBRO_HOME/config.json and CEREBRO_* env. The proxy
+# is a long-lived process spawned by the editor; SIGTERM closes the JSON-RPC
+# pipe and the editor (Zed, ...) respawns `cerebro acp` automatically. The
+# per-session $CEREBRO_HOME/acp/<sid>/ dirs and their spawned upstream
+# children are NOT walked or killed here -- on reconnect the editor's
+# session/load mints fresh sessions, and the new materialisation in
+# cmd_acp_mint will overwrite the stale per-session dirs on first use.
+# Idempotent: no proxy running -> exit 0.
+cmd_acp_restart() {
+  local pids=() pid home
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    home="$(acp_proxy_env_home "$pid" 2>/dev/null || true)"
+    [[ "$home" == "$CEREBRO_HOME" ]] && pids+=("$pid")
+  done < <(acp_running_proxy_pids)
+  case "${#pids[@]}" in
+    0)
+      say "cerebro acp: no running proxy for CEREBRO_HOME=$CEREBRO_HOME (already stopped, or never started) -- nothing to do"
+      return 0
+      ;;
+    1)
+      say "cerebro acp: restarting proxy pid=${pids[0]} (CEREBRO_HOME=$CEREBRO_HOME)"
+      kill -TERM "${pids[0]}" 2>/dev/null || true
+      local i
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "${pids[0]}" 2>/dev/null || break
+        sleep 0.2
+      done
+      if kill -0 "${pids[0]}" 2>/dev/null; then
+        warn "cerebro acp: proxy pid=${pids[0]} did not exit on SIGTERM; sending SIGKILL"
+        kill -KILL "${pids[0]}" 2>/dev/null || true
+      fi
+      say "cerebro acp: proxy ${pids[0]} stopped -- the editor will respawn it and new sessions will pick up the fresh config"
+      return 0
+      ;;
+    *)
+      die "cerebro acp: multiple proxies found for CEREBRO_HOME=$CEREBRO_HOME: ${pids[*]} (kill the wrong ones manually with: kill -TERM <pid>)"
+      ;;
+  esac
+}
+
+# acp_running_proxy_pids -- PIDs of processes whose command line mentions
+# acp_server.py (the exec'd target of `cerebro acp`), excluding the calling
+# process. Echoes one PID per line. `ps -o key=` (headerless) is portable
+# to BSD ps (macOS) and GNU ps (linux).
+acp_running_proxy_pids() {
+  local pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    [[ "$pid" == "$$" ]] && continue
+    printf '%s\n' "$pid"
+  done < <(ps -A -o pid=,command= 2>/dev/null \
+            | awk 'index($0, "acp_server.py") { print $1 }')
+}
+
+# acp_proxy_env_home <pid> -- echo the value of CEREBRO_HOME in <pid>'s env,
+# or empty if unreadable. macOS exposes the env via `ps eww -p <pid>`; linux
+# exposes it via /proc/<pid>/environ (NUL-separated). The macOS form dumps
+# `KEY=VALUE` tokens after the command line, so we split on whitespace and
+# newlines; on linux we split on NUL. We extract only the CEREBRO_HOME key
+# (and only its value) to avoid being fooled by other env values that
+# happen to contain `CEREBRO_HOME=` (e.g. CEREBRO_ACP_CHILD_SPEC is JSON
+# and may contain anything).
+acp_proxy_env_home() {
+  local pid="$1"
+  local blob=""
+  if [[ -r "/proc/$pid/environ" ]]; then
+    blob="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null || true)"
+  else
+    # macOS: ps eww prints `KEY=VAL` tokens separated by spaces after the
+    # command line. Newlines and `=` inside values (e.g. the JSON spec) are
+    # escaped as `\n` and `\=`. We split on raw whitespace; the
+    # awk-by-key filter below picks out the CEREBRO_HOME token.
+    blob="$(ps eww -p "$pid" 2>/dev/null | tail -n +2 | tr ' \t' '\n' || true)"
+  fi
+  printf '%s\n' "$blob" \
+    | awk -F= 'index($0, "CEREBRO_HOME=")==1 { sub(/^CEREBRO_HOME=/,""); print; exit }'
 }

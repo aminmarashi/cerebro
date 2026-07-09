@@ -11,7 +11,7 @@
 # agent experience. cerebro owns four things:
 #
 #   1. session minting -- per session/new it mints a cerebro session
-#      (`cerebro acp-mint`) so spawned `cerebro <subcommand>` children bind to it
+#      (`cerebro acp mint`) so spawned `cerebro <subcommand>` children bind to it
 #      via CEREBRO_SESSION_ID (the same binding the interactive TUI uses);
 #   2. env injection -- CEREBRO_SESSION_ID / CEREBRO_SESSION_DIR / CEREBRO_HOME
 #      plus the backend's child env (CLAUDE_CONFIG_DIR / Anthropic gateway env
@@ -254,17 +254,17 @@ class CerebroAgent:
     async def _mint(self) -> str:
         """Mint a cerebro session + its ACP project dir; returns the cerebro sid."""
         p = await asyncio.create_subprocess_exec(
-            CEREBRO_BIN, "acp-mint",
+            CEREBRO_BIN, "acp", "mint",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         out, err = await p.communicate()
         if p.returncode != 0:
-            raise RuntimeError(f"cerebro acp-mint failed: {err.decode(errors='replace').strip()}")
+            raise RuntimeError(f"cerebro acp mint failed: {err.decode(errors='replace').strip()}")
         return out.decode().strip()
 
     async def _record_foreign(self, cerebro_sid: str, foreign_sid: str) -> None:
         p = await asyncio.create_subprocess_exec(
-            CEREBRO_BIN, "acp-set-foreign", cerebro_sid, foreign_sid,
+            CEREBRO_BIN, "acp", "set-foreign", cerebro_sid, foreign_sid,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )
         await p.wait()
