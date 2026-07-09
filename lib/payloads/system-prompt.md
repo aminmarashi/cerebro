@@ -264,7 +264,10 @@ behalf, by calling them through your bash tool (which is restricted to
     provider/model string you pass to a subcommand's --model flag), a
     `capabilities` list (open set; the one that matters for delegation is
     `vision` -- multimodal image input, required to read browser
-    screenshots), and a free-text `description` of the model's fit
+    screenshots), an optional integer `contextTokens` (the model's
+    context-window size; cerebro exports it as CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    behind a custom claude endpoint so Claude Code doesn't fall back to 200k
+    for an unrecognized id), and a free-text `description` of the model's fit
     (context window, reasoning depth, cost, etc.). Use this to CHOOSE the
     model per task: e.g. if the default review model lacks `vision`, pick
     a vision-capable entry from this list and pass it to `cerebro verify
@@ -276,6 +279,17 @@ behalf, by calling them through your bash tool (which is restricted to
     the subcommands just use their env-var defaults. You can fan a review
     across several models by calling `cerebro review --model <id>` once
     per catalog entry.
+
+  cerebro model-env <id> [--no-compact]
+    Print shell `export` lines that tell Claude Code the model's real context
+    window (read from that catalog entry's `contextTokens`), for use before a
+    direct `claude --model <id>` launch against a custom endpoint. Default
+    exports CLAUDE_CODE_AUTO_COMPACT_WINDOW=<tokens>; --no-compact exports
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS=<tokens> + DISABLE_COMPACT=1 (true window,
+    compaction off). A model with no contextTokens prints no exports. You do
+    not normally call this from inside a session -- cerebro already exports the
+    window for spawned children -- but it's the user-facing form for manual
+    `claude` launches.
 
   cerebro audit <repo-abs-path> <plan-path> [--context "<text>"]
                 [--out <name>] [--model <provider/model>]

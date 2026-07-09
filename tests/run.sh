@@ -2026,8 +2026,8 @@ MDLHOME="$WORKDIR/mdl-home"
 mkdir -p "$MDLHOME"
 cat > "$MDLHOME/models-config.json" <<'MDL_EOF'
 {"models":[
-  {"id":"github-copilot/gemini-3.1-pro-preview","capabilities":["vision","tools","thinking"],"description":"Strong generalist; smaller context window."},
-  {"id":"minimax/minimax-m3","capabilities":["vision","tools","audio"],"description":"Vision + audio; use for screenshot verification."}
+  {"id":"github-copilot/gemini-3.1-pro-preview","capabilities":["vision","tools","thinking"],"contextTokens":256000,"description":"Strong generalist; smaller context window."},
+  {"id":"minimax/minimax-m3","capabilities":["vision","tools","audio"],"contextTokens":512000,"description":"Vision + audio; use for screenshot verification."}
 ]}
 MDL_EOF
 mdl_out="$(CEREBRO_HOME="$MDLHOME" "$CEREBRO_BIN" models 2>/dev/null)"
@@ -2044,6 +2044,77 @@ if [[ "$mdl_out" == *"## minimax/minimax-m3"* \
 else
   printf 'FAIL  130  cerebro models [out=%s json=%s missing=%s]\n' "$mdl_out" "$mdl_json" "$mdl_missing"; fail=$((fail + 1))
   failures+=("130 cerebro models :: out=$mdl_out json=$mdl_json missing=$mdl_missing")
+fi
+
+# --- 130b. models_context_tokens <id> reads contextTokens from the catalog
+# (integer for a known id; empty for an unknown id, a missing field, or no
+# catalog). ---
+ctx_known="$(CEREBRO_HOME="$MDLHOME" bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; CEREBRO_HOME="$2"
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/commands/models.sh"
+  models_context_tokens "minimax/minimax-m3"' _ "$here/../lib" "$MDLHOME" 2>/dev/null)"
+ctx_unknown="$(CEREBRO_HOME="$MDLHOME" bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; CEREBRO_HOME="$2"
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/commands/models.sh"
+  models_context_tokens "nope/missing"' _ "$here/../lib" "$MDLHOME" 2>/dev/null)"
+if [[ "$ctx_known" == "512000" && -z "$ctx_unknown" ]]; then
+  printf 'PASS  130b models_context_tokens reads contextTokens; empty for unknown\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  130b models_context_tokens [known=%s unknown=%s]\n' "$ctx_known" "$ctx_unknown"; fail=$((fail + 1))
+  failures+=("130b models_context_tokens :: known=$ctx_known unknown=$ctx_unknown")
+fi
+
+# --- 130c. backend_claude_endpoint_env exports CLAUDE_CODE_AUTO_COMPACT_WINDOW
+# from the model's contextTokens when CEREBRO_CLAUDE_BASE_URL is set, and leaves
+# it unset when the base URL is unset (subscription path). The shipped default
+# CEREBRO_MODEL (github-copilot/gemini-3.1-pro-preview) has contextTokens 256000
+# in the fixture. ---
+acw_set="$(CEREBRO_CLAUDE_BASE_URL=http://localhost:11434 CEREBRO_HOME="$MDLHOME" bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"; CEREBRO_HOME="$2"
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/commands/models.sh"
+  . "$CEREBRO_LIB_DIR/backend-claude.sh"
+  backend_claude_endpoint_env
+  printf "%s" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}"' _ "$here/../lib" "$MDLHOME" 2>/dev/null)"
+acw_unset="$(CEREBRO_HOME="$MDLHOME" bash -c '
+  set -uo pipefail
+  unset CLAUDE_CODE_AUTO_COMPACT_WINDOW
+  CEREBRO_LIB_DIR="$1"; CEREBRO_HOME="$2"
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  . "$CEREBRO_LIB_DIR/commands/models.sh"
+  . "$CEREBRO_LIB_DIR/backend-claude.sh"
+  backend_claude_endpoint_env
+  printf "%s" "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}"' _ "$here/../lib" "$MDLHOME" 2>/dev/null)"
+if [[ "$acw_set" == "256000" && -z "$acw_unset" ]]; then
+  printf 'PASS  130c endpoint_env exports AUTO_COMPACT_WINDOW when base url set\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  130c endpoint_env [set=%s unset=%s]\n' "$acw_set" "$acw_unset"; fail=$((fail + 1))
+  failures+=("130c endpoint_env :: set=$acw_set unset=$acw_unset")
+fi
+
+# --- 130d. cerebro model-env <id> prints the right exports; --no-compact
+# switches to CLAUDE_CODE_MAX_CONTEXT_TOKENS + DISABLE_COMPACT; an unknown id
+# prints no export (safe eval no-op). ---
+me_default="$(CEREBRO_HOME="$MDLHOME" "$CEREBRO_BIN" model-env minimax/minimax-m3 2>/dev/null)"
+me_nocomp="$(CEREBRO_HOME="$MDLHOME" "$CEREBRO_BIN" model-env minimax/minimax-m3 --no-compact 2>/dev/null)"
+me_unknown="$(CEREBRO_HOME="$MDLHOME" "$CEREBRO_BIN" model-env nope/missing 2>/dev/null)"
+if [[ "$me_default" == "export CLAUDE_CODE_AUTO_COMPACT_WINDOW=512000" \
+   && "$me_nocomp" == *"export CLAUDE_CODE_MAX_CONTEXT_TOKENS=512000"* \
+   && "$me_nocomp" == *"export DISABLE_COMPACT=1"* \
+   && -z "$me_unknown" ]]; then
+  printf 'PASS  130d cerebro model-env prints exports (+ --no-compact, unknown no-op)\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  130d model-env [default=%s nocomp=%s unknown=%s]\n' "$me_default" "$me_nocomp" "$me_unknown"; fail=$((fail + 1))
+  failures+=("130d model-env :: default=$me_default nocomp=$me_nocomp unknown=$me_unknown")
 fi
 
 # claude reviewer stub: emulate `claude -p` for the read-only reviewer -- log

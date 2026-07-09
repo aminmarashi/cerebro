@@ -371,6 +371,18 @@ real key (the default is a placeholder local no-auth servers ignore).
 Small local models (7B-14B) frequently botch tool-call JSON and will
 struggle with cerebro's agentic loop; pick the largest model you can run.
 
+Claude Code can't infer the context window for a model id it doesn't
+recognize (anything not a built-in Claude alias) and falls back to 200k.
+If your catalog entry for `CEREBRO_MODEL` declares a `contextTokens`
+field (see "Model catalog" below), cerebro also exports
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW=<tokens>` into every spawned `claude` so
+auto-compaction doesn't fire at the 200k default on a larger-window model.
+Claude Code may still cap that value at its assumed window for the id (the
+status line can read 200k); for direct `claude --model <id>` launches use
+`cerebro model-env <id> [--no-compact]` to print the same exports, with
+`--no-compact` as the escape hatch that forces the true window at the cost
+of disabling compaction.
+
 ### Reviewer under claude
 
 The read-only reviewer (`cerebro review` / `audit` / `verify` / `improve`)
@@ -404,21 +416,46 @@ claude.ai subscription `claude` is logged into.
 `provider/model` string passed to a subcommand's `--model` flag, same shape
 as `CEREBRO_MODEL`), a `capabilities` list (an open set of present tags;
 `vision` = multimodal image input, the one that matters for reading browser
-screenshots during `verify`), and a free-text `description` for judgement
-the orchestrator reasons about (context window, reasoning depth, cost).
+screenshots during `verify`), a free-text `description` for judgement
+the orchestrator reasons about (context window, reasoning depth, cost), and
+an optional integer `contextTokens` -- the model's context-window size in
+tokens. When the claude backend runs behind a custom endpoint
+(`CEREBRO_CLAUDE_BASE_URL`), cerebro exports `contextTokens` as
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` so Claude Code doesn't fall back to its
+200k default for an unrecognized id; `cerebro model-env <id>` prints the same
+export for a direct `claude --model <id>` launch.
 
 ```json
 {
   "models": [
     { "id": "github-copilot/gemini-3.1-pro-preview",
       "capabilities": ["vision", "tools", "thinking"],
+      "contextTokens": 256000,
       "description": "Strong generalist; smaller context window." },
     { "id": "minimax/minimax-m3",
       "capabilities": ["vision", "tools", "audio"],
+      "contextTokens": 512000,
       "description": "Vision + audio; use for screenshot/visual verification." }
   ]
 }
 ```
+
+`cerebro model-env <id> [--no-compact]` prints shell `export` lines that tell
+Claude Code the model's real context window, for use before a direct
+`claude --model <id>` launch against a custom endpoint:
+
+```bash
+eval "$(cerebro model-env glm-5.2:cloud)" \
+  && claude --model glm-5.2:cloud --dangerously-skip-permissions
+```
+
+By default it exports `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<tokens>` (keeps
+auto-compaction, but Claude Code may cap it at its assumed window for the id
+and the status line can still read 200k). `--no-compact` exports
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS=<tokens>` and `DISABLE_COMPACT=1` instead --
+the documented override that makes `/context` reflect the true window, at the
+cost of disabling auto-compaction. A model with no `contextTokens` (or an
+unknown id) prints a note and no exports, so the `eval` is a safe no-op.
 
 The orchestrator reads this catalog with `cerebro models` and chooses a
 model per task -- e.g. routing `cerebro verify` to a `vision`-capable model

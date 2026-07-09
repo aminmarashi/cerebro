@@ -31,6 +31,7 @@ main() {
     acp-set-foreign) shift; cmd_acp_set_foreign "$@" ;;
     answer) shift; cmd_answer "$@" ;;
     models)  shift; cmd_models "$@" ;;
+    model-env) shift; cmd_model_env "$@" ;;
     steer) shift; cmd_steer "$@" ;;
     restart) shift; cmd_restart "$@" ;;
     observe) shift; cmd_observe "$@" ;;

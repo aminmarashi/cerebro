@@ -32,6 +32,14 @@ backend_claude_endpoint_env() {
   export ANTHROPIC_MODEL="$model"
   export ANTHROPIC_DEFAULT_HAIKU_MODEL="$model"
   unset ANTHROPIC_API_KEY
+  # Claude Code can't infer the context window for an unrecognized custom model
+  # id and falls back to 200k; if the catalog declares contextTokens for this
+  # model, export it as the auto-compact window so compaction doesn't fire at
+  # the 200k default on a larger-window model. See `cerebro model-env` and
+  # models_context_tokens. (Claude Code may cap this at its assumed window for
+  # the id; `cerebro model-env --no-compact` is the escape hatch.)
+  local ctx; ctx="$(models_context_tokens "$model")"
+  [[ -n "$ctx" ]] && export CLAUDE_CODE_AUTO_COMPACT_WINDOW="$ctx"
 }
 
 # The --allowedTools list for a claude child of the given role. The mutating
@@ -346,12 +354,21 @@ backend_claude_acp_child_spec() {
   fi
   local env_json='{}'
   if [[ -n "$CEREBRO_CLAUDE_BASE_URL" ]]; then
+    local acp_model="${CEREBRO_MODEL:-}"
     env_json="$(jq -n --arg base "$CEREBRO_CLAUDE_BASE_URL" \
         --arg tok "${CEREBRO_CLAUDE_AUTH_TOKEN:-ollama}" \
-        --arg model "${CEREBRO_MODEL:-}" \
+        --arg model "$acp_model" \
         '{ANTHROPIC_BASE_URL:$base, ANTHROPIC_AUTH_TOKEN:$tok,
           ANTHROPIC_MODEL:$model, ANTHROPIC_DEFAULT_HAIKU_MODEL:$model,
           ANTHROPIC_API_KEY:null}')"
+    # Mirror backend_claude_endpoint_env: if the catalog declares contextTokens
+    # for the orchestrator model, set the auto-compact window so Claude Code
+    # doesn't fall back to 200k for the unrecognized id. Omit the key (rather
+    # than emit null) when no tokens resolve -- the proxy nulls null env values,
+    # but skipping keeps the env_json clean.
+    local ctx; ctx="$(models_context_tokens "$acp_model")"
+    [[ -n "$ctx" ]] && env_json="$(jq -c --arg ctx "$ctx" \
+        '. + {CLAUDE_CODE_AUTO_COMPACT_WINDOW:$ctx}' <<<"$env_json")"
   fi
   jq -n --argjson argv "$argv_bin" --arg cfg "agent" --arg val "cerebro-orchestrator" \
         --arg ccd "$CEREBRO_HOME/.claude" --argjson env "$env_json" \
