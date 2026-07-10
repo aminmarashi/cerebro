@@ -18,52 +18,34 @@
 #   evolver). Findings go to improvements/meta-improve.md ending with a
 #   META CLIMB verdict line. Routed to `cerebro overlay set meta-<component>`.
 #
-# Both loops ANALYSE/PROPOSE only; nothing here rewrites the harness. Each
-# run is committed to a persistent improvement graph
-# ($CEREBRO_HOME/improvement-graph.json) with a utility estimate computed
-# from the trace corpus. Frontier selection (η1·U + η2·P̂ + η3·N) chooses
-# which past improvement state to build on, so the graph is a DAG, not a
-# linear chain.
+# Both loops ANALYSE/PROPOSE only; nothing here rewrites the harness. Successful
+# runs are appended to a chronological history with a trace-quality snapshot.
 
-# ----- improvement-graph helpers --------------------------------------------
+# ----- improvement-history helpers ------------------------------------------
 
-# The persistent improvement DAG. One file under $CEREBRO_HOME shared across
-# all sessions (the improvement loop is global, not per-session).
-improve_graph_file() { printf '%s\n' "$CEREBRO_HOME/improvement-graph.json"; }
+improve_history_file() { printf '%s\n' "$CEREBRO_HOME/improvement-history.json"; }
 
-# A short hash of all overlay files (task-level + meta), so each graph node
-# carries a complete snapshot of the improvement state at commit time.
-improve_overlay_hash() {
-  local dir; dir="$(overlays_dir)"
-  [[ -d "$dir" ]] || { printf '%s' "none"; return 0; }
-  local f
-  { for f in "$dir"/*.md; do [[ -f "$f" ]] && cat "$f"; done; } 2>/dev/null \
-    | python3 -c 'import sys,hashlib; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:16])' \
-    || printf '%s' "none"
-}
-
-# A short hash of only meta-overlay files (meta-*.md), so the graph can
-# detect when only the improvement procedure changed while task-level
-# overlays stayed the same.
-improve_meta_hash() {
-  local dir; dir="$(overlays_dir)"
-  [[ -d "$dir" ]] || { printf '%s' "none"; return 0; }
-  local f
-  { for f in "$dir"/meta-*.md; do [[ -f "$f" ]] && cat "$f"; done; } 2>/dev/null \
-    | python3 -c 'import sys,hashlib; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:16])' \
-    || printf '%s' "none"
-}
-
-# Count the numbered findings (lines starting with "N.") in the improve
-# output as a rough signal of how many issues the reviewer filed. Captures
+# Count numbered findings written either as `1.` or a Markdown heading such as
+# `## 1.`. Captures
 # the grep count into a variable so grep's exit-1-on-zero does not cause a
 # double-print (grep -c prints 0 AND exits 1; the || fallback would then
 # print a second 0).
 improve_count_findings() {
   local f="$1" n
   [[ -s "$f" ]] || { printf '0'; return 0; }
-  n="$(grep -cE '^[[:space:]]*[0-9]+\.' "$f" 2>/dev/null)" || n=0
+  n="$(grep -cE '^[[:space:]]*(#{1,6}[[:space:]]+)?[0-9]+\.' "$f" 2>/dev/null)" || n=0
   printf '%s' "$n"
+}
+
+improve_valid_verdict() {
+  local f="$1" label="$2" verdict
+  [[ -s "$f" ]] || return 1
+  verdict="$(tail -n 1 "$f" 2>/dev/null || true)"
+  case "$label:$verdict" in
+    improve:HILL\ CLIMB:\ ISSUES\ FOUND|improve:HILL\ CLIMB:\ NO\ CHANGES\ RECOMMENDED) return 0 ;;
+    meta-improve:META\ CLIMB:\ ISSUES\ FOUND|meta-improve:META\ CLIMB:\ NO\ CHANGES\ RECOMMENDED) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # Run one read-only reviewer child and write its final message to out_path.
@@ -85,6 +67,8 @@ improve_run_reviewer() {
     prior=""
   fi
 
+  # Never permit a previous successful report to satisfy this invocation.
+  : > "$out_path"
   local rc id_capture out_capture; id_capture="$(mktemp)"; out_capture="$(mktemp)"
 
   child_store_begin "$ckey" "$(review_backend)" "$label" "$repo" "$label" "$child_log" "${prior:+preserve-id}"
@@ -106,7 +90,7 @@ improve_run_reviewer() {
 
   local _cap_id; _cap_id="$(cat "$id_capture" 2>/dev/null || true)"
 
-  if (( rc == 0 )) && [[ -s "$out_capture" ]]; then
+  if (( rc == 0 )) && improve_valid_verdict "$out_capture" "$label"; then
     cp "$out_capture" "$out_path"
   fi
   rm -f "$id_capture"
@@ -119,7 +103,7 @@ improve_run_reviewer() {
     rm -f "$out_capture"
     [[ -z "$_cap_id" || $rc -eq 5 ]] && child_store_done "$ckey"
     log_event "${label}_failed" "rc=$rc log=$child_log out=$out_path"
-    warn "${label}: review run failed (rc=$rc)"
+    warn "${label}: review run failed or returned an invalid verdict (rc=$rc)"
     [[ -s "$child_log" ]] && warn "see event log: $child_log"
     child_fail_stderr "$child_log"
     return 1
@@ -160,52 +144,24 @@ cmd_improve() {
   local meta_out_path="$imp_dir/meta-improve.md"
   local meta_child_log="${meta_out_path%.md}.log"
 
-  # --- utility estimation + graph update -----------------------------------
-  # Compute the current utility proxy from the trace corpus. This also
-  # sets utility_after on the previous fast-loop graph node (the effect of
-  # the last task-skill improvement is now visible in sessions created
-  # since). Pass the parent node's timestamp as since_ts so delta_u measures
-  # the window since the last improvement, not the full corpus.
-  local graph_file; graph_file="$(improve_graph_file)"
-  local parent_ts; parent_ts="$(python3 "$CEREBRO_LIB_DIR/python/improve_graph.py" \
-    "$graph_file" last-node 2>/dev/null || true)"
-  parent_ts="${parent_ts%$'\n'}"
+# --- utility estimation --------------------------------------------------
+  # Score sessions created since the last recorded improvement run. The
+  # history operation returns an ISO timestamp, never a run id.
+  local history_file; history_file="$(improve_history_file)"
+  local since_ts
+  since_ts="$(python3 "$CEREBRO_LIB_DIR/python/improve_history.py" \
+    "$history_file" last-timestamp)" \
+    || die "improve: could not read improvement history: $history_file"
+  since_ts="${since_ts%$'\n'}"
   local util_now
-  util_now="$(python3 "$CEREBRO_LIB_DIR/python/improve_utility.py" "$CEREBRO_HOME" "$parent_ts" 2>/dev/null || printf '0.5')"
-  python3 "$CEREBRO_LIB_DIR/python/improve_graph.py" "$graph_file" update-utility "$util_now" 2>/dev/null || true
-
-  # --- frontier selection --------------------------------------------------
-  # Score each fast-loop node by η1·U + η2·P̂ + η3·N (Eq. 4) and build on the
-  # best. Falls back to last-node when the graph is empty or no fast nodes
-  # exist yet. Increment the selected parent's visitation counter (N cooling).
-  local parent_node
-  parent_node="$(python3 "$CEREBRO_LIB_DIR/python/improve_graph.py" "$graph_file" best-frontier \
-    "$CEREBRO_IMPROVE_ETA_1" "$CEREBRO_IMPROVE_ETA_2" "$CEREBRO_IMPROVE_ETA_3" 2>/dev/null || true)"
-  parent_node="${parent_node%$'\n'}"
-  if [[ -z "$parent_node" ]]; then
-    parent_node="$(python3 "$CEREBRO_LIB_DIR/python/improve_graph.py" "$graph_file" last-node 2>/dev/null || true)"
-    parent_node="${parent_node%$'\n'}"
-  fi
-  [[ -n "$parent_node" ]] \
-    && python3 "$CEREBRO_LIB_DIR/python/improve_graph.py" "$graph_file" increment-selections "$parent_node" 2>/dev/null || true
-
-  local fast_since_meta
-  fast_since_meta="$(python3 "$CEREBRO_LIB_DIR/python/improve_graph.py" "$graph_file" fast-since-meta 2>/dev/null || printf '0')"
-  fast_since_meta="${fast_since_meta%$'\n'}"
-
-  local run_meta=0
-  if (( force_meta == 1 )); then
-    run_meta=1
-  elif (( fast_since_meta >= CEREBRO_META_HORIZON )); then
-    run_meta=1
-  fi
+  util_now="$(python3 "$CEREBRO_LIB_DIR/python/improve_utility.py" "$CEREBRO_HOME" "$since_ts" 2>/dev/null || printf '0.5')"
 
   local agent; agent="$(review_child_agent_name improve)"
   local results=()
 
   # --- FAST LOOP: task-skill improvement -----------------------------------
   say "cerebro: mining traces under $CEREBRO_HOME against $repo -> $out_path"
-  log_event "improve_started" "repo=$repo out=$out_path util=$util_now meta=${run_meta} parent=$parent_node"
+  log_event "improve_started" "repo=$repo out=$out_path util=$util_now"
 
   local improve_prompt
   improve_prompt="$(cerebro_improve_prompt)
@@ -240,23 +196,30 @@ $context
     log_event "improve_written" "$out_path"
     results+=("$out_path")
 
-    # Commit the fast-loop node to the improvement graph.
+    # Append this successful fast run before checking the horizon, so H=1
+    # fires on the first invocation and H=2 on the second.
     local findings_count verdict
     findings_count="$(improve_count_findings "$out_path")"
     verdict="$(tail -1 "$out_path" 2>/dev/null || true)"
-    local overlay_hash meta_hash ts
+    local ts
     ts="$(ts_iso)"
-    overlay_hash="$(improve_overlay_hash)"
-    meta_hash="$(improve_meta_hash)"
-    local fast_node_id
-    fast_node_id="$(python3 "$CEREBRO_LIB_DIR/python/improve_graph.py" \
-      "$graph_file" add-node "$parent_node" fast "$ts" \
-      "$overlay_hash" "$meta_hash" \
-      "$findings_count" 0 "$verdict" "$util_now" 2>/dev/null || true)"
-    fast_node_id="${fast_node_id%$'\n'}"
-    log_event "improve_graph_node" "node=$fast_node_id parent=$parent_node findings=$findings_count util=$util_now"
+    local fast_run_id
+    fast_run_id="$(python3 "$CEREBRO_LIB_DIR/python/improve_history.py" \
+      "$history_file" add-run fast "$ts" "$findings_count" "$verdict" "$util_now")" \
+      || die "improve: could not append improvement history: $history_file"
+    fast_run_id="${fast_run_id%$'\n'}"
+    log_event "improve_history_run" "run=$fast_run_id findings=$findings_count util=$util_now"
   else
     die "improve: review run failed; not echoing a findings path"
+  fi
+
+  local fast_since_meta
+  fast_since_meta="$(python3 "$CEREBRO_LIB_DIR/python/improve_history.py" "$history_file" fast-since-meta)" \
+    || die "improve: could not read improvement history: $history_file"
+  fast_since_meta="${fast_since_meta%$'\n'}"
+  local run_meta=0
+  if (( force_meta == 1 )) || (( fast_since_meta >= CEREBRO_META_HORIZON )); then
+    run_meta=1
   fi
 
   # --- SLOW LOOP: meta-skill improvement -----------------------------------
@@ -266,8 +229,8 @@ $context
 
     # Build the meta-improve prompt: the slow-loop base prompt, then the
     # current meta-skill component files (presented as reference for
-    # diagnosis, not as active output instructions), then the improvement
-    # history from the graph.
+    # diagnosis, not as active output instructions), then the chronological
+    # improvement history.
     local meta_prompt
     meta_prompt="$(cerebro_meta_improve_prompt)
 
@@ -277,16 +240,16 @@ The cerebro trace corpus to analyse lives under: $CEREBRO_HOME
   sessions/*/improvements/improve.md - past fast-loop findings
   pending-learnings.md, learnings.md, overlays/*.md - applied prefs/overlays
 
-The improvement history (from the graph at $graph_file):"
+The chronological improvement history (from $history_file):"
 
-    # Append a compact summary of recent improvement runs from the graph.
-    local graph_summary
-    graph_summary="$(python3 "$CEREBRO_LIB_DIR/python/improve_graph.py" "$graph_file" list 2>/dev/null || true)"
-    if [[ -n "$graph_summary" ]]; then
+    local history_summary
+    history_summary="$(python3 "$CEREBRO_LIB_DIR/python/improve_history.py" "$history_file" list)" \
+      || die "improve: could not read improvement history: $history_file"
+    if [[ -n "$history_summary" ]]; then
       meta_prompt+="
 
 <improvement_history>
-$(printf '%s' "$graph_summary")
+$(printf '%s' "$history_summary")
 </improvement_history>"
     else
       meta_prompt+="
@@ -321,18 +284,17 @@ $context
       log_event "meta_improve_written" "$meta_out_path"
       results+=("$meta_out_path")
 
-      # Commit the meta-loop node to the improvement graph.
+      # Append the successful meta run; this resets the horizon count.
       local meta_findings_count meta_verdict meta_ts
       meta_findings_count="$(improve_count_findings "$meta_out_path")"
       meta_verdict="$(tail -1 "$meta_out_path" 2>/dev/null || true)"
       meta_ts="$(ts_iso)"
-      local meta_node_id
-      meta_node_id="$(python3 "$CEREBRO_LIB_DIR/python/improve_graph.py" \
-        "$graph_file" add-node "$fast_node_id" meta "$meta_ts" \
-        "$overlay_hash" "$meta_hash" \
-        "$meta_findings_count" 0 "$meta_verdict" "$util_now" 2>/dev/null || true)"
-      meta_node_id="${meta_node_id%$'\n'}"
-      log_event "meta_improve_graph_node" "node=$meta_node_id parent=$fast_node_id findings=$meta_findings_count"
+      local meta_run_id
+      meta_run_id="$(python3 "$CEREBRO_LIB_DIR/python/improve_history.py" \
+        "$history_file" add-run meta "$meta_ts" "$meta_findings_count" "$meta_verdict" "$util_now")" \
+        || die "improve: could not append improvement history: $history_file"
+      meta_run_id="${meta_run_id%$'\n'}"
+      log_event "meta_improve_history_run" "run=$meta_run_id findings=$meta_findings_count"
     else
       warn "improve: meta-loop review run failed; fast-loop findings still available"
     fi

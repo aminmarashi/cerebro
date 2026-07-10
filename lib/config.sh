@@ -34,9 +34,6 @@ CEREBRO_CFG_CLAUDE_BASE_URL=""
 CEREBRO_CFG_CLAUDE_AUTH_TOKEN=""
 CEREBRO_CFG_OVERLAY_CAP=""
 CEREBRO_CFG_META_HORIZON=""
-CEREBRO_CFG_IMPROVE_ETA_1=""
-CEREBRO_CFG_IMPROVE_ETA_2=""
-CEREBRO_CFG_IMPROVE_ETA_3=""
 CEREBRO_CFG_CHILD_SESSION_TTL=""
 CEREBRO_CFG_PAIR_IDLE=""
 CEREBRO_CFG_PAIR_STALL=""
@@ -63,9 +60,6 @@ _cerebro_options_load() {
       claude_auth_token)  CEREBRO_CFG_CLAUDE_AUTH_TOKEN="$v" ;;
       overlay_cap)        CEREBRO_CFG_OVERLAY_CAP="$v" ;;
       meta_horizon)       CEREBRO_CFG_META_HORIZON="$v" ;;
-      improve_eta_1)      CEREBRO_CFG_IMPROVE_ETA_1="$v" ;;
-      improve_eta_2)      CEREBRO_CFG_IMPROVE_ETA_2="$v" ;;
-      improve_eta_3)      CEREBRO_CFG_IMPROVE_ETA_3="$v" ;;
       child_session_ttl)  CEREBRO_CFG_CHILD_SESSION_TTL="$v" ;;
       pair_idle)          CEREBRO_CFG_PAIR_IDLE="$v" ;;
       pair_stall)         CEREBRO_CFG_PAIR_STALL="$v" ;;
@@ -151,16 +145,11 @@ export OPENCODE_CONFIG_DIR="$CEREBRO_HOME/.opencode"
 # overlays aren't all carried in one system message, but still bounded.
 CEREBRO_OVERLAY_CAP="${CEREBRO_OVERLAY_CAP:-${CEREBRO_CFG_OVERLAY_CAP:-4000}}"
 
-# ----- two-timescale self-improvement (MetaSkill-Evolve) --------------------
+# ----- two-timescale self-improvement ---------------------------------------
 # The fast loop (cerebro improve) evolves task-level overlays; the slow loop
 # (cerebro improve --meta) evolves the meta-skill (the improvement procedure
-# itself) every H fast-loop runs. Frontier-selection weights balance task
-# utility, meta-productivity, and visitation novelty when choosing which
-# past improvement state to build on.
+# itself) every H successful fast-loop runs.
 CEREBRO_META_HORIZON="${CEREBRO_META_HORIZON:-${CEREBRO_CFG_META_HORIZON:-2}}"
-CEREBRO_IMPROVE_ETA_1="${CEREBRO_IMPROVE_ETA_1:-${CEREBRO_CFG_IMPROVE_ETA_1:-1.0}}"   # utility U
-CEREBRO_IMPROVE_ETA_2="${CEREBRO_IMPROVE_ETA_2:-${CEREBRO_CFG_IMPROVE_ETA_2:-0.5}}"   # meta-productivity P
-CEREBRO_IMPROVE_ETA_3="${CEREBRO_IMPROVE_ETA_3:-${CEREBRO_CFG_IMPROVE_ETA_3:-0.25}}"  # novelty N
 
 # ----- pair / child-session options (also configurable via config.json) ----
 # These were historically read inline at their use sites with their own

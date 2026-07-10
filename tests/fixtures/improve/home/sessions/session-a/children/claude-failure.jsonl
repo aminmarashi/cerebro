@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"claude-failed-child"}
+{"type":"result","subtype":"error_max_turns","result":"stopped before completion"}

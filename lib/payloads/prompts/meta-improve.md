@@ -17,10 +17,11 @@ each a Markdown file under lib/payloads/prompts/meta/:
 Your job: identify which component is most implicated in the improvement
 loop's recent failures and propose the smallest change to it.
 
-The improvement history (the last H improve runs) is described after this
-prompt. For each past improve run you see: the findings it produced, how
-many were accepted or rejected by the orchestrator, and the utility delta
-(whether subsequent sessions got better or worse).
+The chronological improvement history is described after this prompt. Each
+entry records whether it was a fast or meta run, its timestamp, final verdict,
+finding count, and a trace-quality snapshot. Use the cited findings files and
+current traces for evidence; the history does not claim whether a human
+accepted a proposal or whether a proposal caused later outcomes.
 
 Diagnose the meta-skill:
 

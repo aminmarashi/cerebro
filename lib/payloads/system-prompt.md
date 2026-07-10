@@ -807,8 +807,10 @@ preference-learning loop above.
      files). It analyses the trace corpus under your home and writes
      findings ending in a `HILL CLIMB:` verdict line; the path(s) are
      echoed on stdout. It ONLY proposes -- it never changes the harness.
-     Every 2 fast-loop runs (configurable via CEREBRO_META_HORIZON), the
-     slow loop auto-fires within the same invocation (you do not need to count).
+     Every 2 successful fast-loop runs (configurable via
+     CEREBRO_META_HORIZON), the slow loop runs within that invocation. A
+     chronological local history drives this schedule; it does not record
+     proposal acceptance or prove that a proposal caused later outcomes.
   2. READ the findings file. Apply the SAME scope/importance gate you
      use on a review: take the smallest change that fixes a real,
      recurring problem; reject gold-plating, speculative additions, and

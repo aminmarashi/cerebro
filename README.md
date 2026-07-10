@@ -43,7 +43,8 @@ the PR work, `rg` recommended).
   surface without forking.
 * **It improves itself** — `cerebro improve` mines its own accumulated
   traces for problems that recur across runs and proposes the smallest
-  fixes back into the harness, routed through local overlays.
+  fixes back into the harness. A human must approve every overlay or source
+  change; the reviewer never applies proposals itself.
 
 How to drive each of these: **[docs/USAGE.md](docs/USAGE.md)**.
 How it works inside — design, decisions, constraints:

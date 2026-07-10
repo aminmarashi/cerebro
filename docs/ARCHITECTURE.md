@@ -329,9 +329,9 @@ overlays rather than the shipped files.
 
 **The hill-climbing (analysis) loop.** `cerebro improve` closes the
 improvement loop without breaking invariant #1 (the orchestrator never
-mutates code directly). It is codex-as-analysis-agent: a read-only
-`codex exec` (cwd = the cerebro source repo, so it cites real harness
-files) mines the on-disk trace corpus under `$CEREBRO_HOME`
+mutates code directly). A read-only reviewer mines the on-disk trace corpus
+under `$CEREBRO_HOME` with its cwd set to the cerebro source repo, so it can
+cite real harness files. The corpus includes
 (`sessions/*/children/*.jsonl` trajectories, `transcript.jsonl`
 milestones, grader feedback, the applied learnings/overlays) for
 problems that recur across runs, and writes findings to
@@ -340,7 +340,12 @@ verdict. Same stream/`-o`/failure shape as `review` (decision 8). It
 only proposes; the orchestrator reads the findings and routes each
 accepted item back into an overlay (or `learn-set`), or — for a
 maintainer of the source — an upstream PR. No auto-apply, no scheduled
-runs.
+runs. Successful fast and meta runs append to the linear
+`improvement-history.json`; the history drives the configurable meta-loop
+horizon but does not model branches, restored overlay states, acceptance
+feedback, or causal utility deltas. A trace-quality snapshot is diagnostic
+only. Reviewer output is accepted only when its exact final verdict line is
+valid, so stale or malformed reports cannot be routed.
 
 ### 8. Streams over buffers: one pipeline per child
 

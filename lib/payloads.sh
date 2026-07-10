@@ -91,9 +91,9 @@ cerebro_improve_prompt() {
 }
 
 # The slow-loop (meta-skill evolution) prompt fed to the read-only reviewer
-# child spawned by `cerebro improve --meta`. The improvement history (last H
-# fast-loop runs with findings, accepted counts, and utility deltas) is
-# appended after this prompt in cmd_improve. The meta-skill component files
+# child spawned by `cerebro improve --meta`. The chronological history of
+# successful runs and their verdict/finding counts is appended after this
+# prompt in cmd_improve. The meta-skill component files
 # are cited as read-only reference (the model diagnoses them, not follows
 # their output instructions), so the component prompts' HILL CLIMB verdict
 # does not conflict with the meta-loop's META CLIMB verdict.

@@ -3622,6 +3622,165 @@ else
   failures+=("176 cerebro_improve_prompt content")
 fi
 
+# --- 176c. utility and chronological-history helpers use realistic schemas. ---
+improve_py_out="$(python3 "$here/improve_test.py" 2>&1)"
+if [[ "$improve_py_out" == "all checks passed" ]]; then
+  printf 'PASS  176c improve utility + chronological history fixtures\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  176c improve utility/history [out=%s]\n' "$improve_py_out"; fail=$((fail + 1))
+  failures+=("176c improve utility/history :: $improve_py_out")
+fi
+
+# --- 176d. finding counting supports plain lists and Markdown headings. ---
+COUNT_FINDINGS="$WORKDIR/improve-count.md"
+cat > "$COUNT_FINDINGS" <<'EOF'
+1. Plain finding
+## 2. Heading finding
+### 3. Another heading finding
+not a finding
+EOF
+counted="$(ov_fn improve_count_findings "$COUNT_FINDINGS" 2>/dev/null)"
+if [[ "$counted" == 3 ]]; then
+  printf 'PASS  176d improve finding counting supports list + heading formats\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  176d improve finding count [got=%s]\n' "$counted"; fail=$((fail + 1))
+  failures+=("176d improve finding count :: $counted")
+fi
+
+# Deterministic read-only reviewer used for isolated end-to-end improve flows.
+# Its final text depends only on whether the visible prompt is fast or meta.
+IMPROVE_STUB_DIR="$WORKDIR/improve-review-stub"
+mkdir -p "$IMPROVE_STUB_DIR"
+IMPROVE_STUB_LOG="$WORKDIR/improve-review-prompts.log"
+cat > "$IMPROVE_STUB_DIR/opencode" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n---\n' "$*" >> "$IMPROVE_STUB_LOG"
+case "${IMPROVE_STUB_MODE:-valid}" in
+  failure) exit 1 ;;
+esac
+printf '{"type":"step_start","sessionID":"IMPROVE-STUB","part":{"type":"step-start"}}\n'
+case "${IMPROVE_STUB_MODE:-valid}" in
+  empty) ;;
+  malformed)
+    printf '{"type":"text","sessionID":"IMPROVE-STUB","part":{"type":"text","text":"## 1. Finding\\nHILL CLIMB: MAYBE"}}\n'
+    ;;
+  meta-malformed)
+    if [[ "$*" == *"META-LOOP"* ]]; then
+      printf '{"type":"text","sessionID":"IMPROVE-STUB","part":{"type":"text","text":"## 1. Meta finding\\nMETA CLIMB: MAYBE"}}\n'
+    else
+      printf '{"type":"text","sessionID":"IMPROVE-STUB","part":{"type":"text","text":"1. Fast finding\\nHILL CLIMB: ISSUES FOUND"}}\n'
+    fi
+    ;;
+  *)
+    if [[ "$*" == *"META-LOOP"* ]]; then
+      printf '{"type":"text","sessionID":"IMPROVE-STUB","part":{"type":"text","text":"## 1. Meta finding\\nMETA CLIMB: ISSUES FOUND"}}\n'
+    else
+      printf '{"type":"text","sessionID":"IMPROVE-STUB","part":{"type":"text","text":"1. Fast finding\\nHILL CLIMB: ISSUES FOUND"}}\n'
+    fi
+    ;;
+esac
+printf '{"type":"step_finish","sessionID":"IMPROVE-STUB","part":{"type":"step-finish","reason":"stop"}}\n'
+EOF
+chmod +x "$IMPROVE_STUB_DIR/opencode"
+
+improve_home() {
+  local home="$1" session="$2"
+  mkdir -p "$home/sessions/$session/children" "$home/overlays"
+  : > "$home/sessions/$session/transcript.jsonl"
+  printf '{"created_at":"2026-01-01T00:00:00Z"}\n' > "$home/sessions/$session/metadata.json"
+}
+
+# --- 176e. H=2 fires on invocation two and emits fast then meta paths. ---
+IMP_H2="$WORKDIR/improve-h2"; IMP_H2_SESSION="improve-h2-session"
+improve_home "$IMP_H2" "$IMP_H2_SESSION"
+: > "$IMPROVE_STUB_LOG"
+h2_first="$(env PATH="$IMPROVE_STUB_DIR:$PATH" IMPROVE_STUB_LOG="$IMPROVE_STUB_LOG" \
+  CEREBRO_HOME="$IMP_H2" CEREBRO_SESSION_ID="$IMP_H2_SESSION" CEREBRO_META_HORIZON=2 \
+  "$CEREBRO_BIN" improve "$REPO" 2>/dev/null)"
+h2_second="$(env PATH="$IMPROVE_STUB_DIR:$PATH" IMPROVE_STUB_LOG="$IMPROVE_STUB_LOG" \
+  CEREBRO_HOME="$IMP_H2" CEREBRO_SESSION_ID="$IMP_H2_SESSION" CEREBRO_META_HORIZON=2 \
+  "$CEREBRO_BIN" improve "$REPO" 2>/dev/null)"
+h2_types="$(jq -r '.runs[].type' "$IMP_H2/improvement-history.json" 2>/dev/null | tr '\n' ' ')"
+if [[ "$(printf '%s\n' "$h2_first" | grep -c '/improve.md$')" -eq 1 \
+      && "$(printf '%s\n' "$h2_first" | grep -c 'meta-improve.md$')" -eq 0 \
+      && "$(printf '%s\n' "$h2_second" | grep -cE '/(improve|meta-improve)\.md$')" -eq 2 \
+      && "$h2_types" == "fast fast meta " ]]; then
+  printf 'PASS  176e improve H=2 schedule includes current fast run\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  176e improve H=2 [first=%s second=%s types=%s]\n' "$h2_first" "$h2_second" "$h2_types"; fail=$((fail + 1))
+  failures+=("176e improve H=2 schedule")
+fi
+
+# --- 176f. H=1 and explicit --meta both run meta in the same invocation;
+# model and meta-overlay content reach the reviewer prompts. ---
+IMP_H1="$WORKDIR/improve-h1"; improve_home "$IMP_H1" "improve-h1-session"
+: > "$IMPROVE_STUB_LOG"
+h1_out="$(env PATH="$IMPROVE_STUB_DIR:$PATH" IMPROVE_STUB_LOG="$IMPROVE_STUB_LOG" \
+  CEREBRO_HOME="$IMP_H1" CEREBRO_SESSION_ID="improve-h1-session" CEREBRO_META_HORIZON=1 \
+  "$CEREBRO_BIN" improve "$REPO" --model test/reviewer 2>/dev/null)"
+IMP_FORCE="$WORKDIR/improve-force"; improve_home "$IMP_FORCE" "improve-force-session"
+printf 'META OVERLAY ROUTING MARKER\n' > "$IMP_FORCE/overlays/meta-analyzer.md"
+: > "$IMPROVE_STUB_LOG"
+force_out="$(env PATH="$IMPROVE_STUB_DIR:$PATH" IMPROVE_STUB_LOG="$IMPROVE_STUB_LOG" \
+  CEREBRO_HOME="$IMP_FORCE" CEREBRO_SESSION_ID="improve-force-session" CEREBRO_META_HORIZON=99 \
+  "$CEREBRO_BIN" improve "$REPO" --meta --model test/reviewer 2>/dev/null)"
+if [[ "$(printf '%s\n' "$h1_out" | grep -cE '/(improve|meta-improve)\.md$')" -eq 2 \
+      && "$(printf '%s\n' "$force_out" | grep -cE '/(improve|meta-improve)\.md$')" -eq 2 \
+      && "$(grep -c 'META OVERLAY ROUTING MARKER' "$IMPROVE_STUB_LOG")" -eq 2 \
+      && "$(grep -c -- '--model test/reviewer' "$IMPROVE_STUB_LOG")" -eq 2 \
+      && "$(grep -c 'META-LOOP' "$IMPROVE_STUB_LOG")" -eq 1 ]]; then
+  printf 'PASS  176f improve H=1/--meta + overlay/meta/model prompt routing\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  176f improve H=1/force routing [h1=%s force=%s log=%s]\n' \
+    "$h1_out" "$force_out" "$(cat "$IMPROVE_STUB_LOG")"; fail=$((fail + 1))
+  failures+=("176f improve H=1/force routing")
+fi
+
+# --- 176g. stale files, empty/malformed output, and reviewer failures are
+# never surfaced as successful findings paths. ---
+improve_failure_case() {
+  local mode="$1"
+  local home="$WORKDIR/improve-$mode" session="improve-$mode-session"
+  improve_home "$home" "$session"
+  mkdir -p "$home/sessions/$session/improvements"
+  printf 'STALE\nHILL CLIMB: ISSUES FOUND\n' > "$home/sessions/$session/improvements/improve.md"
+  local out rc
+  out="$(env PATH="$IMPROVE_STUB_DIR:$PATH" IMPROVE_STUB_LOG="$IMPROVE_STUB_LOG" \
+    IMPROVE_STUB_MODE="$mode" CEREBRO_HOME="$home" CEREBRO_SESSION_ID="$session" \
+    CEREBRO_META_HORIZON=99 "$CEREBRO_BIN" improve "$REPO" 2>/dev/null)"; rc=$?
+  [[ $rc -ne 0 && -z "$out" && ! -s "$home/sessions/$session/improvements/improve.md" \
+     && ! -e "$home/improvement-history.json" ]]
+}
+if improve_failure_case empty && improve_failure_case malformed && improve_failure_case failure; then
+  printf 'PASS  176g improve rejects stale/empty/malformed/failed reviewer output\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  176g improve reviewer failure safety\n'; fail=$((fail + 1))
+  failures+=("176g improve reviewer failure safety")
+fi
+
+# --- 176h. a malformed meta verdict clears stale meta output while preserving
+# the independently successful fast report and history entry. ---
+IMP_META_BAD="$WORKDIR/improve-meta-malformed"; IMP_META_BAD_SESSION="improve-meta-malformed-session"
+improve_home "$IMP_META_BAD" "$IMP_META_BAD_SESSION"
+mkdir -p "$IMP_META_BAD/sessions/$IMP_META_BAD_SESSION/improvements"
+printf 'STALE\nMETA CLIMB: ISSUES FOUND\n' > \
+  "$IMP_META_BAD/sessions/$IMP_META_BAD_SESSION/improvements/meta-improve.md"
+meta_bad_out="$(env PATH="$IMPROVE_STUB_DIR:$PATH" IMPROVE_STUB_LOG="$IMPROVE_STUB_LOG" \
+  IMPROVE_STUB_MODE=meta-malformed CEREBRO_HOME="$IMP_META_BAD" \
+  CEREBRO_SESSION_ID="$IMP_META_BAD_SESSION" CEREBRO_META_HORIZON=1 \
+  "$CEREBRO_BIN" improve "$REPO" 2>/dev/null)"; meta_bad_rc=$?
+meta_bad_types="$(jq -r '.runs[].type' "$IMP_META_BAD/improvement-history.json" 2>/dev/null | tr '\n' ' ')"
+if [[ $meta_bad_rc -eq 0 && "$(printf '%s\n' "$meta_bad_out" | grep -c '/improve.md$')" -eq 1 \
+      && "$(printf '%s\n' "$meta_bad_out" | grep -c 'meta-improve.md$')" -eq 0 \
+      && ! -s "$IMP_META_BAD/sessions/$IMP_META_BAD_SESSION/improvements/meta-improve.md" \
+      && "$meta_bad_types" == "fast " ]]; then
+  printf 'PASS  176h malformed meta verdict clears stale output, preserves fast result\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  176h malformed meta verdict [rc=%d out=%s types=%s]\n' \
+    "$meta_bad_rc" "$meta_bad_out" "$meta_bad_types"; fail=$((fail + 1))
+  failures+=("176h malformed meta verdict")
+fi
+
 # --- 176b. $CEREBRO_HOME/config.json supplies option defaults with precedence
 # env > config.json > hardcoded default. Unknown keys are ignored, a missing
 # file falls back to the hardcoded defaults, and an env var overrides the file

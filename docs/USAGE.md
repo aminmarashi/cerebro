@@ -273,14 +273,19 @@ show` lists them.
 
 ## Improve the harness from its own traces
 
-`cerebro improve <cerebro-source-repo>` runs codex as a read-only
+`cerebro improve <cerebro-source-repo>` runs the configured reviewer as a read-only
 analysis agent over the accumulated trace corpus under `~/.cerebro`,
 mining problems that **recur across runs** and proposing the smallest
 fixes back into the harness. It only proposes — findings end in a
 `HILL CLIMB:` verdict, and the orchestrator routes each accepted item
 into a local overlay or `learnings.md` (or, if you maintain the cerebro
 source, an upstream PR). Nothing rewrites the harness unsupervised; run
-it on request.
+it on request. Successful runs are recorded chronologically in
+`~/.cerebro/improvement-history.json`. Every `meta_horizon` successful fast
+runs, or whenever `--meta` is passed, a second read-only pass reviews that
+history and can propose a change to one of the local `meta-*` overlays. The
+history records findings and verdicts, not acceptance decisions or causal
+utility deltas.
 
 ## Skip the ceremony
 
@@ -382,7 +387,6 @@ Options and their defaults (all optional):
 | `claude_cmd` | `CEREBRO_CLAUDE_CMD` | claude executable | `claude` |
 | `overlay_cap` | `CEREBRO_OVERLAY_CAP` | max chars in a single harness overlay file | `4000` |
 | `meta_horizon` | `CEREBRO_META_HORIZON` | fast-loop runs between meta-skill (`--meta`) runs | `2` |
-| `improve_eta_1` / `_2` / `_3` | `CEREBRO_IMPROVE_ETA_*` | frontier-selection weights (utility / meta-productivity / novelty) | `1.0` / `0.5` / `0.25` |
 | `debug` | `CEREBRO_DEBUG` | `1` for verbose logs | `0` |
 
 Two deliberate limits to know about:
