@@ -60,27 +60,35 @@ behalf, by calling them through your bash tool (which is restricted to
        - expected <=2 min: call with the default (no timeout arg needed).
        - expected 2-10 min: pass timeout 600000 and foreground-wait.
        - possible >10 min (test suites, cargo test, cypress, e2e verify, any
-         build/test): NEVER foreground-wait. Use BACKGROUND-AND-POLL. Launch
-         redirected and detached (bash tests/run.sh redirects to /tmp/x.out
-         with 2>&1, then an ampersand), return at once, then poll the output
-         file with separate Bash calls that each pass timeout 15000 and run a
-         `grep -cE '^[A-Z]'` counting PASS-or-FAIL summary lines or a `tail -20`
-         of the file.
-          Poll at most once every 30s. A run is done when the output shows a
-          terminal marker (a PASS/FAIL summary line, a non-zero exit reported,
-          or the background pid is no longer alive via kill -0 pid). Do NOT pass
-          timeout 600000 and block on a possible >10-min run; the tool kills it
-          mid-run, orphans the work, and loses visibility.
+         build/test): NEVER foreground-wait, and NEVER tight-poll. WAIT on the
+         background task instead. Launch it with the Bash tool's background
+         mode (run_in_background: true) -- the harness tracks it and resumes
+         you with a completion notification when it exits, so you spend zero
+         tokens on status checks. That notification is the preferred way to
+         follow ANY long run, including a cerebro child. Do NOT shell-detach
+         with a bare `&` and then re-check it yourself: a bare `&` gives you
+         no completion notification, which is exactly what forces you to poll.
+          POLLING IS A FALLBACK ONLY, for the case where no completion
+          notification is available (your harness does not resume you on
+          background-task exit). If you must poll, ALWAYS delay between
+          checks: each poll call should sleep ~30s THEN inspect, e.g. one
+          Bash call `sleep 30; tail -20 /tmp/x.out; grep -cE '^[A-Z]'
+          /tmp/x.out` -- never back-to-back reads with no wait. Re-reading the
+          same unchanged status every few seconds burns tokens for nothing;
+          with a real delay you still follow the run to completion at a
+          fraction of the cost. A run is done when the output shows a terminal
+          marker (a PASS/FAIL summary line, a non-zero exit reported, or the
+          background pid is no longer alive via `kill -0 <pid>`). Do NOT pass
+          timeout 600000 and foreground-block on a possible >10-min run; the
+          tool kills it mid-run, orphans the work, and loses visibility.
           A cerebro child (execute/apply-review/review/verify/doc-write) is a
-          long-running process you launch in the background (`cerebro <cmd>
-          > /tmp/x.out 2>&1 &`) and then poll with the SAME background+poll
-          rule, including the once-per-30s floor. There is no push
-          "notification" -- decide completion the same way as any other
-          backgrounded run: the backgrounded shell pid is no longer alive
-          (`kill -0 <pid>` returns non-zero / the `.out` file shows a terminal
-          marker). Do NOT foreground-block on a cerebro child, and do NOT poll
-          its worktree `git status` in a tight loop -- poll the backgrounded
-          process/file at most once every 30s.
+          long-running process. Treat it the SAME way: launch it in the
+          background (`cerebro <cmd> > /tmp/x.out 2>&1`) using the Bash tool's
+          background mode and WAIT for the completion notification; fall back
+          to delay-polling only if no notification comes. Do NOT
+          foreground-block on a cerebro child, do NOT tight-poll its `.out`
+          file, and do NOT poll its worktree `git status` in a loop -- it
+          changes nothing useful between checks.
 2. You do not ask the user for permission to run cerebro subcommands;
    running them is your job. Do narrate what you are doing in plain
    English ("I'll draft a plan now", "the reviewer flagged two
@@ -1273,10 +1281,10 @@ children, and you watch ALL of them at once.)
 
 How to run the monitor:
 
-  1. POLL IN A LOOP. Run `cerebro observe [<session-id>]` (omit the id to
-     auto-pick the most recently active other session with live paired
-     children). Each call blocks for a window (up to ~90s, returning early
-     after a longer quiet gap) and returns ONE substantial batch of new
+  1. BLOCK FOR THE NEXT BATCH. Run `cerebro observe [<session-id>]` (omit
+     the id to auto-pick the most recently active other session with live
+     paired children). Each call blocks for a window (up to ~90s, returning
+     early after a longer quiet gap) and returns ONE substantial batch of new
      activity from every live paired child of that session, then a footer:
      `=== OBSERVE STATUS: active ===` means children are still live -- call
      `cerebro observe` AGAIN to get the next batch; `... done ===` means

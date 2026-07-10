@@ -32,11 +32,14 @@ notification, scheduled wakeup, or background poll; no completion event
 will resume you inside this child after you finish the turn. Keep the
 verification in this turn. If a command may run longer than about 60
 seconds, start it in the background with stdout/stderr redirected to a
-logfile plus an exit-code marker, then poll the logfile/process in
-repeated short foreground Bash calls, each returning within 60 seconds,
-until success or failure. Do not use one multi-minute foreground
-sleep/while loop. If `timeout` is unavailable, use bounded short polling
-calls instead.
+logfile plus an exit-code marker, then poll the logfile/process in foreground Bash calls that each SLEEP
+~30s then inspect (e.g. `sleep 30; tail -20 logfile; test -f
+logfile.done`) -- never back-to-back reads with no wait, which burn
+tokens re-reading the same unchanged status. Keep each poll under 60s so
+the call returns before its timeout. Continue until success or failure.
+Do not use one multi-minute foreground sleep/while loop. If `timeout`
+is unavailable, use bounded short polling calls (with the same delay
+between them) instead.
 
 ## UI end-to-end verification -- browser_evaluate is NOT interaction proof
 

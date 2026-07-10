@@ -29,9 +29,10 @@ spec rules out.
 
 How to run, every loop:
 
-  1. POLL. Run `cerebro observe [<session-id>]` (omit the id to auto-pick the
-     most recently active other session with live paired children). Each call
-     returns one substantial batch and a STATUS footer: `active` -> call
+  1. BLOCK FOR THE NEXT BATCH. Run `cerebro observe [<session-id>]` (omit
+     the id to auto-pick the most recently active other session with live
+     paired children). Each call blocks for a window and returns one
+     substantial batch and a STATUS footer: `active` -> call
      again, `done` -> the children are finished, so stop looping.
   2. NARRATE AS AN ENGAGED PAIR. Follow the "# Observing another cerebro
      session" guidance above to the letter: name the pattern/architecture and
