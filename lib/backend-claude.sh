@@ -180,6 +180,7 @@ backend_claude_launch_orchestrator() {
   exec "$CEREBRO_CLAUDE_CMD" \
     --session-id "$sid" \
     --append-system-prompt-file "$prompt_file" \
+    --permission-mode bypassPermissions \
     --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Write(/tmp/cerebro-$sid/**)"
 }
 
@@ -196,12 +197,14 @@ backend_claude_launch_observer() {
     exec "$CEREBRO_CLAUDE_CMD" \
       --session-id "$sid" \
       --append-system-prompt "$prompt" \
+      --permission-mode bypassPermissions \
       "Start observing session $target now: run \`cerebro observe $target\`, narrate what you see, and keep looping until its children are done or I stop you." \
       --allowedTools "$allowed"
   else
     exec "$CEREBRO_CLAUDE_CMD" \
       --session-id "$sid" \
       --append-system-prompt "$prompt" \
+      --permission-mode bypassPermissions \
       --allowedTools "$allowed"
   fi
 }
@@ -219,6 +222,7 @@ backend_claude_resume_orchestrator() {
     exec "$CEREBRO_CLAUDE_CMD" \
       --resume "$id" \
       --append-system-prompt-file "$prompt_file" \
+      --permission-mode bypassPermissions \
       --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Write(/tmp/cerebro-$sid/**)"
   else
     # Bare resume: claude shows its own picker. The hook writes the
@@ -226,6 +230,7 @@ backend_claude_resume_orchestrator() {
     exec "$CEREBRO_CLAUDE_CMD" \
       --resume \
       --append-system-prompt-file "$prompt_file" \
+      --permission-mode bypassPermissions \
       --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Write(/tmp/cerebro-$sid/**)"
   fi
 }
