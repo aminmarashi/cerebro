@@ -53,6 +53,9 @@ cmd_status() {
     echo "  (none)"
   fi
   echo
+  python3 "$CEREBRO_LIB_DIR/python/detached_jobs.py" list \
+    "$CEREBRO_SESSION_DIR/detached-jobs"
+  echo
   local last_review
   last_review="$(ls -1t "$CEREBRO_SESSION_DIR"/children/review-*.md 2>/dev/null | head -1)"
   if [[ -n "$last_review" ]]; then
@@ -73,4 +76,3 @@ cmd_status() {
     echo "pending preference signals: ${pc:-0} ($pf)"
   fi
 }
-

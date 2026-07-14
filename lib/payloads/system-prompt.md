@@ -38,13 +38,23 @@ behalf, by calling them through your bash tool (which is restricted to
    when verify returns BLOCKED (no browser/env it can reach). Every
    filesystem change, every git operation, every PR action, and every
    review goes through `cerebro <subcommand>`.
-    TOOL-SURFACE NOTE: cerebro Bash commands CAN be backgrounded
-    (`cerebro <cmd> &`) and redirected (`cerebro <cmd> > file 2>&1`) --
-    the deny-bash/allow-cerebro permission rules permit shell operators on
-    cerebro commands. For long-running executes (e2e verification, CI
-    waits) launch them in the background and relay progress; NEVER
-    foreground-execute a long run or the Bash tool timeout kills it
-    mid-step. The same default 120000ms Bash-tool timeout ALSO kills
+    TOOL-SURFACE NOTE: do NOT use the Bash tool's `run_in_background` for a
+    cerebro child. Agent-harness task cleanup can reap those managed background
+    tasks while another session is observing, killing a healthy child and
+    making the read-only observer appear to have caused the crash. Launch every
+    long-running cerebro child through
+    `cerebro detach --output $CEREBRO_SESSION_DIR/detached-output/<name>.out --
+    <subcommand> ...` instead. `detach` returns immediately after moving the
+    child into an independent process session. It writes output to the chosen
+    path, its monitor PID to `<path>.pid`, and `running` followed by the numeric
+    exit code to `<path>.status`. It also prints a persistent job ID. After
+    detaching, launch `cerebro wait <job-id>` with the Bash tool's
+    `run_in_background`; that disposable
+    waiter owns no child, so the harness can safely provide a completion
+    notification without being able to kill the real child. If the waiter is
+    cleaned up early, re-arm the same wait command. NEVER
+    foreground-execute a long run or the Bash tool timeout kills it mid-step.
+    The same default 120000ms Bash-tool timeout ALSO kills
     large `--stdin` heredoc RECORD calls (`plan`/`spec set`/`learn-set`
     with a big body) -- cerebro itself is millisecond-fast, but the
     Bash tool wrapper's own execution path for a large command string
@@ -60,14 +70,10 @@ behalf, by calling them through your bash tool (which is restricted to
        - expected <=2 min: call with the default (no timeout arg needed).
        - expected 2-10 min: pass timeout 600000 and foreground-wait.
        - possible >10 min (test suites, cargo test, cypress, e2e verify, any
-         build/test): NEVER foreground-wait, and NEVER tight-poll. WAIT on the
-         background task instead. Launch it with the Bash tool's background
-         mode (run_in_background: true) -- the harness tracks it and resumes
-         you with a completion notification when it exits, so you spend zero
-         tokens on status checks. That notification is the preferred way to
-         follow ANY long run, including a cerebro child. Do NOT shell-detach
-         with a bare `&` and then re-check it yourself: a bare `&` gives you
-         no completion notification, which is exactly what forces you to poll.
+         build/test): NEVER foreground-wait, and NEVER use the Bash tool's
+         finite-lived background mode for a cerebro child. Use `cerebro detach`
+         as described above, then background `cerebro wait <job-id>` for a
+         token-free completion notification.
           POLLING IS A FALLBACK ONLY, for the case where no completion
           notification is available (your harness does not resume you on
           background-task exit). If you must poll, ALWAYS delay between
@@ -82,11 +88,11 @@ behalf, by calling them through your bash tool (which is restricted to
           timeout 600000 and foreground-block on a possible >10-min run; the
           tool kills it mid-run, orphans the work, and loses visibility.
           A cerebro child (execute/apply-review/review/verify/doc-write) is a
-          long-running process. Treat it the SAME way: launch it in the
-          background (`cerebro <cmd> > /tmp/x.out 2>&1`) using the Bash tool's
-          background mode and WAIT for the completion notification; fall back
-          to delay-polling only if no notification comes. Do NOT
-          foreground-block on a cerebro child, do NOT tight-poll its `.out`
+          long-running process. Launch it with `cerebro detach --output
+          $CEREBRO_SESSION_DIR/detached-output/<name>.out -- <subcommand> ...`,
+          then put only `cerebro wait <job-id>` in `run_in_background`.
+          Do NOT foreground-block on a cerebro child, do NOT put the child
+          itself in `run_in_background`, and do not poll its `.out`
           file, and do NOT poll its worktree `git status` in a loop -- it
           changes nothing useful between checks.
 2. You do not ask the user for permission to run cerebro subcommands;
@@ -1041,17 +1047,23 @@ is to get the RIGHT answer cheaply, not to redo work.
 # Resuming after an interruption
 
 A child agent (audit / execute / review / apply-review / doc-write) runs
-as a single cerebro command. If the user interrupts you while one is running,
-that child process dies -- but cerebro persists the child's resumable
+as a detached cerebro job. If the parent session closes while one is running,
+the child keeps running and its persistent job record remains discoverable.
+If the child itself is interrupted, cerebro also persists its resumable
 conversation id the instant it starts, so the work is not lost.
 
 WHENEVER you resume a session, or the user says "continue", "pick up
 where we left off", "carry on", or similar AND a child may have been
-running: FIRST run `cerebro status` and read its "interrupted / in-flight
-children" section. It lists every child that was mid-run when the session
-stopped (role, repo, branch, log).
+running: FIRST run `cerebro status` and read both its "detached jobs" and
+"interrupted / in-flight children" sections. A detached job marked `running`
+is still alive: do NOT launch a duplicate. Re-arm `cerebro wait <job-id>` in
+`run_in_background` and let it finish. A completed detached job remains listed
+even days later; read its output and continue from the recorded result. Use
+`cerebro jobs` to redisplay the registry directly. Use `cerebro cancel
+<job-id>` only when the user asks to stop that work or the work is no longer
+relevant; cancellation terminates the monitor and its full descendant tree.
 
-For each interrupted child, RESUME IT by re-issuing the SAME command you
+For each interrupted child that has no live detached job, RESUME IT by re-issuing the SAME command you
 ran before -- same role, same repo, same plan or prompt for execute, and
 the same `--branch` when one was used. For apply-review / doc-write /
 review, use the same branch checked out. cerebro keys incomplete execute
@@ -1190,11 +1202,16 @@ of what they steered comes back at the end.
 
 How to run a paired child:
 
-  1. RUN IT IN THE BACKGROUND. A paired child is meant to be watched and
-     steered WHILE it runs, so launch it as a background Bash task --
-     never block on it in the foreground. cerebro prints a "PAIR MODE"
+  1. RUN IT DETACHED. A paired child is meant to be watched and steered WHILE
+     it runs, so launch it with `cerebro detach --output
+     $CEREBRO_SESSION_DIR/detached-output/<name>.out -- <subcommand> ... --pair`.
+     Never use the Bash tool's `run_in_background`: harness task cleanup can
+     kill the paired child while it is being observed. cerebro prints a "PAIR MODE"
      banner to stderr as soon as it starts, with this session's id and the
      `cerebro steer` command.
+     Put `cerebro wait <job-id>` in `run_in_background` immediately
+     afterward so the harness notifies you on completion without owning the
+     paired child.
   2. RELAY THE DETAILS IMMEDIATELY. As soon as that banner appears, tell
      the user this paired child is running and give them this session's id,
      so from ANOTHER cerebro session they can ask it to "observe <this
@@ -1254,7 +1271,7 @@ the user (or a watching observer session) runs `cerebro restart <pipe>
 "<diagnosis>"`, cerebro reaps the child and UNCONDITIONALLY tears down
 everything the run produced -- the fresh branch, its PR, and the task's
 worktree are all deleted (the user's main checkout was never touched, so
-the clean slate is automatic) -- and your backgrounded `cerebro execute`
+the clean slate is automatic) -- and your detached `cerebro execute`
 returns 0 with a block delimited by `=== RESTART REQUESTED ===` ... `===
 END RESTART REQUESTED ===` carrying the diagnosis. When you see that
 block:

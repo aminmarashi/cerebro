@@ -250,6 +250,14 @@ when the decision is genuinely theirs.
 
 ### 6. Resumability: persist the child id at start, not at exit
 
+Long-running commands first pass through `cerebro detach`. A monitor in a new
+process session owns the real command, while a per-job record and authoritative
+PID/status sidecars live under `sessions/<id>/detached-jobs/`. The interactive
+parent can exit without killing the monitor. `cerebro jobs` and `cerebro
+status` rediscover live or completed work; `cerebro wait <job-id>` is a
+disposable notification process, and `cerebro cancel <job-id>` verifies the
+recorded monitor identity before terminating its complete descendant tree.
+
 `sessions/<id>/child-sessions.json` maps a **child key** — sha1 of
 `repo + role + discriminator` (for execute, branch plus plan path or
 inline prompt; for branch-local roles, branch; for audit, output name) —

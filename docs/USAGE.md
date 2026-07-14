@@ -14,6 +14,11 @@ cerebro --resume              # claude's session picker
 cerebro --observe [<id>]      # watch-and-steer-only session for another
                               #   session's live paired children
 cerebro list                  # list sessions, newest first
+cerebro detach --output <path> -- <child-command> [...]
+                              # launch a child outside harness task cleanup
+cerebro jobs                  # list persistent detached child jobs
+cerebro wait <job-id>         # wait for a detached job's completion
+cerebro cancel <job-id>       # stop a detached job and its descendants
 ```
 
 `cerebro --observe` opens an interactive chat dedicated to looking over the
@@ -233,11 +238,18 @@ Sessions are durable. `cerebro --resume <id>` (or the picker) drops
 you back into the same conversation, with the session spec, plans,
 review state, and transcripts intact on disk.
 
-Interrupting mid-run loses nothing: every child's resumable
-conversation id is persisted the instant it starts. On "continue" the
-orchestrator checks `cerebro status` for interrupted in-flight
-children and resumes each one — continuing half-done work via
-`--resume` instead of redoing it (and instead of duplicating commits).
+Closing the parent mid-run loses nothing. Long-running children use
+`cerebro detach`, which records each job under the session and keeps it alive
+outside the agent harness's process group. On "continue" the orchestrator
+checks `cerebro status`: a live detached job is allowed to finish rather than
+being duplicated, and a completed job remains discoverable through `cerebro
+jobs`. `cerebro wait <job-id>` provides completion notification without owning
+the child; `cerebro cancel <job-id>` deliberately stops the monitor and its
+full descendant process tree.
+
+If the child process itself is interrupted, its resumable conversation id was
+persisted the instant it started. The orchestrator resumes each interrupted
+child via `--resume` instead of redoing it (and instead of duplicating commits).
 Stored ids stay resumable for `CEREBRO_CHILD_SESSION_TTL` seconds
 (default 24h), but normal child launches only auto-resume children still
 marked in-flight. Once a child finishes cleanly, the next sub-agent starts

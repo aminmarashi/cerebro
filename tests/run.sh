@@ -4071,6 +4071,140 @@ for legacy in "acp-mint" "acp-set-foreign"; do
   fi
 done
 
+# --- 185. detached process helper survives its launcher and records completion.
+DETACH_OUT="$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID/detach-test/survived.out"
+DETACH_STATUS="$DETACH_OUT.status"
+DETACH_PID="$DETACH_OUT.pid"
+DETACH_JOBS="$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID/detached-jobs"
+DETACH_JOB_ID="00000000-0000-0000-0000-000000000185"
+DETACH_JOB="$DETACH_JOBS/$DETACH_JOB_ID.json"
+mkdir -p "$DETACH_JOBS"
+detach_start="$(date +%s)"
+python3 "$here/../lib/python/detach_process.py" \
+  "$DETACH_OUT" "$DETACH_STATUS" "$DETACH_PID" \
+  "$DETACH_JOB" "$DETACH_JOB_ID" verify \
+  /bin/sh -c 'sleep 1; printf survived'
+detach_launch_rc=$?
+detach_elapsed=$(( $(date +%s) - detach_start ))
+detach_wait="$($CEREBRO_BIN wait "$DETACH_JOB_ID" 2>&1)"
+detach_wait_rc=$?
+detach_body="$(cat "$DETACH_OUT" 2>/dev/null)"
+detach_status="$(cat "$DETACH_STATUS" 2>/dev/null)"
+detach_jobs="$($CEREBRO_BIN jobs 2>&1)"
+if (( detach_launch_rc == 0 && detach_wait_rc == 0 && detach_elapsed <= 1 )) \
+   && [[ "$detach_body" == "survived" && "$detach_status" == "0" \
+          && -s "$DETACH_PID" && "$detach_wait" == *"finished (exit 0)"* \
+          && "$detach_jobs" == *"[succeeded] $DETACH_JOB_ID"* ]]; then
+  printf 'PASS  185  detached process survives launcher and persists job state\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  185  detached process [launch=%d wait=%d elapsed=%d body=%s status=%s wait_out=%s jobs=%s]\n' \
+    "$detach_launch_rc" "$detach_wait_rc" "$detach_elapsed" "$detach_body" "$detach_status" "$detach_wait" "$detach_jobs"
+  fail=$((fail + 1))
+  failures+=("185 detached process :: launch=$detach_launch_rc wait=$detach_wait_rc elapsed=$detach_elapsed body=$detach_body status=$detach_status wait_out=$detach_wait jobs=$detach_jobs")
+fi
+
+# --- 186. detach rejects arbitrary commands and paths outside session scratch.
+detach_bad_out="$WORKDIR/detach-bad.out"
+detach_bad="$($CEREBRO_BIN detach --output "$detach_bad_out" -- status 2>&1)"
+detach_bad_rc=$?
+detach_path_bad="$($CEREBRO_BIN detach --output "$detach_bad_out" -- verify 2>&1)"
+detach_path_bad_rc=$?
+wait_path_bad="$($CEREBRO_BIN wait "$detach_bad_out.status" 2>&1)"
+wait_path_bad_rc=$?
+if (( detach_bad_rc != 0 && detach_path_bad_rc != 0 && wait_path_bad_rc != 0 )) \
+   && [[ "$detach_bad" == *"not a long-running child subcommand"* \
+         && "$detach_path_bad" == *"output must be under"* \
+         && "$wait_path_bad" == *"status must be under"* ]]; then
+  printf 'PASS  186  detach/wait reject arbitrary subcommands and paths\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  186  detach validation [cmd_rc=%d cmd=%s path_rc=%d path=%s wait_rc=%d wait=%s]\n' \
+    "$detach_bad_rc" "$detach_bad" "$detach_path_bad_rc" "$detach_path_bad" \
+    "$wait_path_bad_rc" "$wait_path_bad"
+  fail=$((fail + 1))
+  failures+=("186 detach validation :: cmd_rc=$detach_bad_rc cmd=$detach_bad path_rc=$detach_path_bad_rc path=$detach_path_bad wait_rc=$wait_path_bad_rc wait=$wait_path_bad")
+fi
+
+# --- 187. waiter propagates a detached child's non-zero exit code.
+DETACH_FAIL_OUT="$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID/detach-test/failed.out"
+DETACH_FAIL_ID="00000000-0000-0000-0000-000000000187"
+python3 "$here/../lib/python/detach_process.py" \
+  "$DETACH_FAIL_OUT" "$DETACH_FAIL_OUT.status" "$DETACH_FAIL_OUT.pid" \
+  "$DETACH_JOBS/$DETACH_FAIL_ID.json" "$DETACH_FAIL_ID" review \
+  /bin/sh -c 'sleep 0.2; exit 7' >/dev/null
+detach_fail_wait="$($CEREBRO_BIN wait "$DETACH_FAIL_ID" 2>&1)"
+detach_fail_rc=$?
+if (( detach_fail_rc == 7 )) && [[ "$detach_fail_wait" == *"finished (exit 7)"* ]]; then
+  printf 'PASS  187  detached waiter propagates child failure\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  187  detached waiter failure [rc=%d out=%s]\n' "$detach_fail_rc" "$detach_fail_wait"
+  fail=$((fail + 1))
+  failures+=("187 detached waiter failure :: rc=$detach_fail_rc out=$detach_fail_wait")
+fi
+
+# --- 188. cancel verifies and terminates the monitor's full descendant tree.
+DETACH_CANCEL_OUT="$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID/detach-test/cancel.out"
+DETACH_CANCEL_ID="00000000-0000-0000-0000-000000000188"
+DETACH_CANCEL_CHILD="$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID/detach-test/cancel-child.pid"
+python3 "$here/../lib/python/detach_process.py" \
+  "$DETACH_CANCEL_OUT" "$DETACH_CANCEL_OUT.status" "$DETACH_CANCEL_OUT.pid" \
+  "$DETACH_JOBS/$DETACH_CANCEL_ID.json" "$DETACH_CANCEL_ID" execute \
+  /bin/sh -c 'sleep 30 & printf "%s\n" "$!" > "$1"; wait' sh \
+  "$DETACH_CANCEL_CHILD" >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [[ -s "$DETACH_CANCEL_CHILD" ]] && break
+  sleep 0.1
+done
+detach_cancel_monitor="$(cat "$DETACH_CANCEL_OUT.pid" 2>/dev/null)"
+detach_cancel_child="$(cat "$DETACH_CANCEL_CHILD" 2>/dev/null)"
+detach_cancel_out="$($CEREBRO_BIN cancel "$DETACH_CANCEL_ID" 2>&1)"
+detach_cancel_rc=$?
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if ! kill -0 "$detach_cancel_monitor" 2>/dev/null \
+     && ! kill -0 "$detach_cancel_child" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+detach_cancel_status="$(cat "$DETACH_CANCEL_OUT.status" 2>/dev/null)"
+detach_cancel_jobs="$($CEREBRO_BIN jobs 2>&1)"
+if (( detach_cancel_rc == 0 )) \
+   && ! kill -0 "$detach_cancel_monitor" 2>/dev/null \
+   && ! kill -0 "$detach_cancel_child" 2>/dev/null \
+   && [[ "$detach_cancel_status" == "130" \
+         && "$detach_cancel_out" == *"cancelled detached job $DETACH_CANCEL_ID"* \
+         && "$detach_cancel_jobs" == *"[cancelled] $DETACH_CANCEL_ID"* ]]; then
+  printf 'PASS  188  detached cancel terminates full descendant tree\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  188  detached cancel [rc=%d monitor=%s child=%s status=%s out=%s jobs=%s]\n' \
+    "$detach_cancel_rc" "$detach_cancel_monitor" "$detach_cancel_child" \
+    "$detach_cancel_status" "$detach_cancel_out" "$detach_cancel_jobs"
+  fail=$((fail + 1))
+  failures+=("188 detached cancel :: rc=$detach_cancel_rc monitor=$detach_cancel_monitor child=$detach_cancel_child status=$detach_cancel_status out=$detach_cancel_out jobs=$detach_cancel_jobs")
+  kill -KILL "$detach_cancel_monitor" "$detach_cancel_child" 2>/dev/null || true
+fi
+
+# --- 189. a stale running record fails instead of waiting forever.
+DETACH_STALE_OUT="$CEREBRO_HOME/sessions/$CEREBRO_SESSION_ID/detach-test/stale.out"
+DETACH_STALE_ID="00000000-0000-0000-0000-000000000189"
+printf 'running\n' > "$DETACH_STALE_OUT.status"
+printf '99999999\n' > "$DETACH_STALE_OUT.pid"
+printf '{"id":"%s","command":"verify","output":"%s","status":"%s","pid_file":"%s","pid":99999999,"created_at":"2026-07-14T00:00:00Z"}\n' \
+  "$DETACH_STALE_ID" "$DETACH_STALE_OUT" "$DETACH_STALE_OUT.status" \
+  "$DETACH_STALE_OUT.pid" > "$DETACH_JOBS/$DETACH_STALE_ID.json"
+detach_stale_wait="$($CEREBRO_BIN wait "$DETACH_STALE_ID" 2>&1)"
+detach_stale_rc=$?
+detach_stale_status="$(cat "$DETACH_STALE_OUT.status" 2>/dev/null)"
+if (( detach_stale_rc == 125 )) \
+   && [[ "$detach_stale_status" == "125" \
+         && "$detach_stale_wait" == *"monitor 99999999 disappeared"* ]]; then
+  printf 'PASS  189  detached waiter detects stale monitor records\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  189  detached stale monitor [rc=%d status=%s out=%s]\n' \
+    "$detach_stale_rc" "$detach_stale_status" "$detach_stale_wait"
+  fail=$((fail + 1))
+  failures+=("189 detached stale monitor :: rc=$detach_stale_rc status=$detach_stale_status out=$detach_stale_wait")
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 if (( fail > 0 )); then
   printf '\nFailures:\n'

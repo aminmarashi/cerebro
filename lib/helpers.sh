@@ -153,6 +153,11 @@ usage:
   cerebro --observe [<id>]      # watch-and-steer-only session for another's
                                 #   live paired children (id, or auto-pick)
   cerebro list                  # list sessions, newest first
+  cerebro detach --output <path> -- <child-command> [...]
+                                # launch a long child outside agent-tool timeouts
+  cerebro wait <job-id>        # wait for detached completion notification
+  cerebro jobs                  # rediscover detached jobs after resume
+  cerebro cancel <job-id>       # terminate a detached job and descendants
   cerebro --help                # this help
 
 cerebro launches a native interactive agent chat -- opencode or claude,
