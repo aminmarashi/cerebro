@@ -26,6 +26,7 @@ cmd_doc_write() {
       *) die "doc-write: unknown arg: $1" ;;
     esac
   done
+  [[ -n "$model" ]] && require_model_for_backend "$model" "$(current_backend)" doc-write
   [[ -n "$repo" ]] \
     || die "usage: cerebro doc-write <repo-abs-path> (<plan-path> [--notes \"...\"] | --prompt \"<text>\") [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "doc-write: repo path must be absolute: $repo"

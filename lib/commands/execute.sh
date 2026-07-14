@@ -29,6 +29,7 @@ cmd_execute() {
       *) die "execute: unknown arg: $1" ;;
     esac
   done
+  [[ -n "$model" ]] && require_model_for_backend "$model" "$(current_backend)" execute
   [[ -n "$repo" ]] \
     || die "usage: cerebro execute <repo-abs-path> (<plan-path> | --prompt \"<text>\") [--base <branch>] [--branch <name>] [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "execute: repo path must be absolute: $repo"

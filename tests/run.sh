@@ -1820,6 +1820,25 @@ if [[ -x "$REVIEW_STUB_DIR/opencode" ]]; then
     failures+=("127m review --model :: argv=$(cat "$REVIEW_ARGV_LOG")")
   fi
 
+  # --- 127n. a --model whose format does not match the backend is rejected up
+  # front with a clear message, instead of being silently dropped / handed
+  # to opencode (which would fail with a confusing trailing-slash "Model not
+  # found"). The opencode reviewer needs a provider/model id (with a '/'); a
+  # claude-backend "model:tag" id (no '/') is rejected and spawns no child. ---
+  : > "$REVIEW_ARGV_LOG"
+  vfn_out="$(env PATH="$REVIEW_STUB_PATH" CEREBRO_SESSION_ID="$RSESS" \
+    "$CEREBRO_BIN" verify "$REPO" --prompt "verify it" --model glm-5.2:cloud 2>&1)"
+  vfn_rc=$?
+  if (( vfn_rc != 0 )) \
+      && [[ "$vfn_out" == *"cerebro: error:"*"glm-5.2:cloud"* ]] \
+      && [[ "$vfn_out" == *"is not valid for the opencode backend"* ]] \
+      && [[ ! -s "$REVIEW_ARGV_LOG" ]]; then
+    printf 'PASS  127n  verify rejects a claude-backend --model for the opencode reviewer\n'; pass=$((pass + 1))
+  else
+    printf 'FAIL  127n  verify did not reject claude-backend --model [rc=%s out=%s argv=%s]\n' "$vfn_rc" "$vfn_out" "$(cat "$REVIEW_ARGV_LOG")"; fail=$((fail + 1))
+    failures+=("127n verify --model reject :: rc=$vfn_rc out=$vfn_out")
+  fi
+
   # --- 127e. the findings are the run's final message, written to out_path ---
   if [[ -s "$rev_out" ]] && grep -q 'no issues found' "$rev_out"; then
     printf 'PASS  127e  review findings are the run final message (written to out_path)\n'; pass=$((pass + 1))

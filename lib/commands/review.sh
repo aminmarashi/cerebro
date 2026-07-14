@@ -21,6 +21,7 @@ cmd_review() {
       *) die "review: unknown arg: $1" ;;
     esac
   done
+  [[ -n "$model" ]] && require_model_for_backend "$model" "$(review_backend)" review
   [[ -n "$repo" ]] || die "usage: cerebro review <repo-abs-path> [--base <ref>] [--criteria-file <plan-path>] [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "review: repo path must be absolute: $repo"
   [[ -d "$repo" ]] || die "review: repo not a directory: $repo"
@@ -259,6 +260,7 @@ cmd_apply_review() {
       *) die "apply-review: unknown arg: $1" ;;
     esac
   done
+  [[ -n "$model" ]] && require_model_for_backend "$model" "$(current_backend)" apply-review
   # An explicitly-passed --prompt must carry a non-empty operand. Without
   # this guard, `--prompt` with no value (or `--prompt ""`) leaves
   # prompt_text empty and would slip into the default-findings fallback

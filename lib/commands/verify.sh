@@ -28,6 +28,7 @@ cmd_verify() {
       *) die "verify: unknown arg: $1" ;;
     esac
   done
+  [[ -n "$model" ]] && require_model_for_backend "$model" "$(review_backend)" verify
   [[ -n "$repo" ]] \
     || die "usage: cerebro verify <repo-abs-path> (--plan <path> | --prompt \"<text>\") [--context \"<text>\"] [--model <provider/model>]"
   [[ "$repo" = /* ]] || die "verify: repo path must be absolute: $repo"

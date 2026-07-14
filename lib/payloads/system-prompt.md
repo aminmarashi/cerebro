@@ -288,6 +288,15 @@ behalf, by calling them through your bash tool (which is restricted to
     across several models by calling `cerebro review --model <id>` once
     per catalog entry.
 
+    The two backends use different id FORMATS, and a --model is rejected if
+    its format does not match the subcommand's backend: the opencode backend
+    (review / audit / verify / improve) needs a `provider/model` id -- one
+    with a `/`; the claude backend (editing children: execute / apply-review
+    / doc-write / answer) takes a `model:tag` or plain id with no `/`. So
+    only pass an id whose shape matches the backend the subcommand runs under
+    -- a claude-backend id handed to an opencode reviewer fails fast with a
+    clear message instead of a confusing silent failure.
+
   cerebro model-env <id> [--no-compact]
     Print shell `export` lines that tell Claude Code the model's real context
     window (read from that catalog entry's `contextTokens`), for use before a
