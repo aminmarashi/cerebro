@@ -4205,6 +4205,160 @@ else
   failures+=("189 detached stale monitor :: rc=$detach_stale_rc status=$detach_stale_status out=$detach_stale_wait")
 fi
 
+# ========================================================================
+# 190-197. Interactive guard (require_interactive): capability-based TTY
+# check instead of a parent-executable allow-list. Cerebro must accept any
+# controller that allocates a genuine PTY (shell, editor, another agent such
+# as Codex with `tty: true`) and still reject pipes/redirects/cron. Driven
+# through tests/pty_run.py, which forks a real PTY and optionally wraps the
+# child in an intermediate process whose kernel `comm` basename is a chosen
+# name (the dimension the old heuristic used).
+#
+# The suite sets CEREBRO_SESSION_ID globally (which bypasses the guard), so
+# every case here runs with `env -u CEREBRO_SESSION_ID` to make the guard fire.
+# `cerebro list` is the lightweight probe: it calls require_interactive then, on
+# an empty home, prints "cerebro: no sessions yet" and exits 0 -- no backend
+# launch, no network.
+# ========================================================================
+PTY_HOME="$WORKDIR/pty-home"
+mkdir -p "$PTY_HOME"
+PTY_RUN="$here/pty_run.py"
+pty_probe_rc() {  # <captured-helper-output> -> echoes the RC=<n> value
+  printf '%s\n' "$1" | sed -n 's/^RC=//p'
+}
+pty_out() {       # <captured-helper-output> -> prints the ---OUTPUT--- body
+  awk '/^---OUTPUT---$/{f=1;next} /^---END---$/{f=0} f' <<<"$1"
+}
+
+# --- 190. genuine PTY with parent "codex" is accepted (the reported bug) ---
+res="$(env -u CEREBRO_SESSION_ID CEREBRO_HOME="$PTY_HOME" \
+  python3 "$PTY_RUN" --parent codex --timeout 6 -- "$CEREBRO_BIN" list 2>&1)"
+rc190="$(pty_probe_rc "$res")"; out190="$(pty_out "$res")"
+if [[ "$rc190" == "0" && "$out190" == *"no sessions yet"* ]]; then
+  printf 'PASS  190  PTY with parent codex is accepted\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  190  PTY+codex rejected [rc=%s out=%s]\n' "$rc190" "$out190"
+  fail=$((fail + 1)); failures+=("190 PTY+codex :: rc=$rc190 out=$out190")
+fi
+
+# --- 191. genuine PTY with another non-shell controller ("node") accepted ---
+rm -rf "$PTY_HOME"; mkdir -p "$PTY_HOME"
+res="$(env -u CEREBRO_SESSION_ID CEREBRO_HOME="$PTY_HOME" \
+  python3 "$PTY_RUN" --parent node --timeout 6 -- "$CEREBRO_BIN" list 2>&1)"
+rc191="$(pty_probe_rc "$res")"; out191="$(pty_out "$res")"
+if [[ "$rc191" == "0" && "$out191" == *"no sessions yet"* ]]; then
+  printf 'PASS  191  PTY with non-shell parent node is accepted\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  191  PTY+node rejected [rc=%s out=%s]\n' "$rc191" "$out191"
+  fail=$((fail + 1)); failures+=("191 PTY+node :: rc=$rc191 out=$out191")
+fi
+
+# --- 192. ordinary interactive shell launch (parent "bash") remains accepted ---
+rm -rf "$PTY_HOME"; mkdir -p "$PTY_HOME"
+res="$(env -u CEREBRO_SESSION_ID CEREBRO_HOME="$PTY_HOME" \
+  python3 "$PTY_RUN" --parent bash --timeout 6 -- "$CEREBRO_BIN" list 2>&1)"
+rc192="$(pty_probe_rc "$res")"; out192="$(pty_out "$res")"
+if [[ "$rc192" == "0" && "$out192" == *"no sessions yet"* ]]; then
+  printf 'PASS  192  PTY with parent bash (ordinary shell) is accepted\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  192  PTY+bash rejected [rc=%s out=%s]\n' "$rc192" "$out192"
+  fail=$((fail + 1)); failures+=("192 PTY+bash :: rc=$rc192 out=$out192")
+fi
+
+# --- 193. no-TTY (cron-style: stdin from /dev/null, stdout to a file) rejected ---
+rm -rf "$PTY_HOME"; mkdir -p "$PTY_HOME"
+env -u CEREBRO_SESSION_ID CEREBRO_HOME="$PTY_HOME" \
+  "$CEREBRO_BIN" list </dev/null >"$WORKDIR/193-out" 2>"$WORKDIR/193-err"
+rc193=$?; err193="$(cat "$WORKDIR/193-err")"
+if (( rc193 != 0 )) && [[ "$err193" == *"stdin and stdout must be terminals"* ]]; then
+  printf 'PASS  193  no-TTY launch rejected\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  193  no-TTY not rejected [rc=%d err=%s]\n' "$rc193" "$err193"
+  fail=$((fail + 1)); failures+=("193 no-TTY :: rc=$rc193 err=$err193")
+fi
+
+# --- 194. piped stdin rejected ---
+rm -rf "$PTY_HOME"; mkdir -p "$PTY_HOME"
+err194="$(printf '' | env -u CEREBRO_SESSION_ID CEREBRO_HOME="$PTY_HOME" \
+  "$CEREBRO_BIN" list 2>&1 >/dev/null)"; rc194=$?
+if (( rc194 != 0 )) && [[ "$err194" == *"stdin and stdout must be terminals"* ]]; then
+  printf 'PASS  194  piped stdin rejected\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  194  piped stdin not rejected [rc=%d err=%s]\n' "$rc194" "$err194"
+  fail=$((fail + 1)); failures+=("194 piped-stdin :: rc=$rc194 err=$err194")
+fi
+
+# --- 195. redirected stdout rejected ---
+rm -rf "$PTY_HOME"; mkdir -p "$PTY_HOME"
+env -u CEREBRO_SESSION_ID CEREBRO_HOME="$PTY_HOME" \
+  "$CEREBRO_BIN" list >"$WORKDIR/195-out" 2>"$WORKDIR/195-err"
+rc195=$?; err195="$(cat "$WORKDIR/195-err")"
+if (( rc195 != 0 )) && [[ "$err195" == *"stdin and stdout must be terminals"* ]]; then
+  printf 'PASS  195  redirected stdout rejected\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  195  redirected stdout not rejected [rc=%d err=%s]\n' "$rc195" "$err195"
+  fail=$((fail + 1)); failures+=("195 redirected-stdout :: rc=$rc195 err=$err195")
+fi
+
+# --- 196. full interactive session through a PTY: receive a prompt, continue,
+# EOF cleanly. A stub `opencode` (the real orchestrator backend execs it) reads
+# stdin lines and echoes them, so we can prove the PTY relays input both ways
+# across multiple turns and that Ctrl-D ends the session. ---
+PTY_STUB_DIR="$WORKDIR/pty-opencode-stub"
+mkdir -p "$PTY_STUB_DIR"
+cat > "$PTY_STUB_DIR/opencode" <<'EOF'
+#!/usr/bin/env bash
+echo "STUB-READY"
+while IFS= read -r line; do
+  printf 'stub: %s\n' "$line"
+done
+exit 0
+EOF
+chmod +x "$PTY_STUB_DIR/opencode"
+rm -rf "$PTY_HOME"; mkdir -p "$PTY_HOME"
+cat > "$WORKDIR/196-script" <<'EOF'
+EXPECT STUB-READY
+SEND hello
+EXPECT stub: hello
+SEND one more turn
+EXPECT stub: one more turn
+SENDEOF
+EOF
+res="$(env -u CEREBRO_SESSION_ID CEREBRO_BACKEND=opencode \
+  CEREBRO_HOME="$PTY_HOME" PATH="$PTY_STUB_DIR:$PATH" \
+  python3 "$PTY_RUN" --parent codex --timeout 8 --script "$WORKDIR/196-script" \
+  -- "$CEREBRO_BIN" 2>&1)"
+rc196="$(pty_probe_rc "$res")"; out196="$(pty_out "$res")"
+if [[ "$rc196" == "0" \
+   && "$out196" == *"STUB-READY"* \
+   && "$out196" == *"stub: hello"* \
+   && "$out196" == *"stub: one more turn"* ]]; then
+  printf 'PASS  196  interactive session driven through PTY (prompt + continue + EOF)\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  196  PTY session drive failed [rc=%s out=%s]\n' "$rc196" "$out196"
+  fail=$((fail + 1)); failures+=("196 PTY-session :: rc=$rc196 out=$out196")
+fi
+
+# --- 197. interruption through the PTY: Ctrl-C terminates the session (the PTY
+# forwards SIGINT to the foreground process). Any non-zero rc proves it did not
+# hang and was interrupted rather than exiting cleanly. ---
+rm -rf "$PTY_HOME"; mkdir -p "$PTY_HOME"
+cat > "$WORKDIR/197-script" <<'EOF'
+EXPECT STUB-READY
+SENDINTR
+EOF
+res="$(env -u CEREBRO_SESSION_ID CEREBRO_BACKEND=opencode \
+  CEREBRO_HOME="$PTY_HOME" PATH="$PTY_STUB_DIR:$PATH" \
+  python3 "$PTY_RUN" --parent codex --timeout 8 --script "$WORKDIR/197-script" \
+  -- "$CEREBRO_BIN" 2>&1)"
+rc197="$(pty_probe_rc "$res")"
+if [[ "$rc197" != "0" && "$rc197" != "none" ]]; then
+  printf 'PASS  197  Ctrl-C through PTY interrupts the session (rc=%s)\n' "$rc197"; pass=$((pass + 1))
+else
+  printf 'FAIL  197  Ctrl-C did not interrupt [rc=%s]\n' "$rc197"
+  fail=$((fail + 1)); failures+=("197 PTY-intr :: rc=$rc197")
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 if (( fail > 0 )); then
   printf '\nFailures:\n'

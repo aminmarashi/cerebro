@@ -179,8 +179,11 @@ orchestrator can pick a model per task (e.g. a vision-capable model for
 screenshot verification).
 
 Notes:
-  * Interactive-only. cerebro refuses to run under a non-terminal parent
-    (pipes, scripts, cron). Sub-agents launched by the orchestrator are
+  * Interactive-only. cerebro requires a genuine interactive TTY on stdin
+    and stdout; it accepts any controller that allocates a real PTY (a
+    shell, a multiplexer, an editor, or another agent such as Codex run
+    with `tty: true`) and rejects pipes, redirected input/output, and
+    cron-style launches. Sub-agents launched by the orchestrator are
     exempt via $CEREBRO_SESSION_ID.
   * Concurrency. cerebro has no concurrency control: it will not stop
     you from running two mutating ops against the same repo at once,
@@ -249,23 +252,29 @@ See `cerebro --help` and docs/USAGE.md for the full table.
 EOF
 }
 
-# Interactive guard -- only runs for top-level invocations from a shell.
-# Sub-agents spawned by the orchestrator have CEREBRO_SESSION_ID set and
-# bypass this check; that's how `cerebro plan`, `cerebro execute`, ...
-# can run inside the orchestrator's non-TTY Bash tool.
+# Interactive guard -- only runs for top-level invocations. Cerebro is driven
+# through a terminal, so it requires a genuine interactive TTY on stdin AND
+# stdout. The check is capability-based (is each a terminal?) rather than
+# parent-process-name based, so any controller that allocates a real PTY is
+# accepted -- a shell, a terminal multiplexer, an editor, or another agent
+# controller such as Codex that launches with `tty: true`. Pipes, redirected
+# input/output, and cron-style or otherwise non-interactive launches have no
+# TTY on stdin/stdout and are rejected here.
+#
+# The previous parent-executable allow-list guarded no invariant this TTY
+# check does not already cover: the child-impersonation guard is preserved by
+# launching children with `env -u CEREBRO_SESSION_ID` (so a child that ran
+# `cerebro` would fall through to this TTY check and fail it -- the
+# orchestrator's Bash tool has no TTY -- rather than impersonate the session).
+#
+# Sub-agents spawned by the orchestrator have CEREBRO_SESSION_ID set and bypass
+# this check; that's how `cerebro plan`, `cerebro execute`, ... can run inside
+# the orchestrator's non-TTY Bash tool.
 require_interactive() {
   [[ -n "${CEREBRO_SESSION_ID:-}" ]] && return 0
   if [[ ! -t 0 || ! -t 1 ]]; then
     die "cerebro is interactive-only; stdin and stdout must be terminals"
   fi
-  local parent
-  parent="$(ps -o comm= -p "$PPID" 2>/dev/null | awk '{print $1}')"
-  parent="${parent##*/}"
-  case "$parent" in
-    -bash|bash|-zsh|zsh|-fish|fish|-sh|sh|-dash|dash|-ksh|ksh|-tcsh|tcsh) ;;
-    tmux*|screen*|login|sshd) ;;
-    *) die "cerebro is interactive-only; refused to run under parent '$parent'" ;;
-  esac
 }
 
 require_deps() {

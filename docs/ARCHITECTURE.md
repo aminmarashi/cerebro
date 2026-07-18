@@ -504,9 +504,15 @@ new file in `lib/commands/` plus one route line.
 
 These are environmental or deliberate limits the design accepts:
 
-* **Interactive-only at the top level.** `cerebro` refuses to run under
-  a non-terminal parent (pipes, scripts, cron) via `require_interactive()`
-  — a TTY check plus a parent-process allow-list. Sub-agents are exempt
+* **Interactive-only at the top level.** `cerebro` requires a genuine
+  interactive TTY on stdin and stdout, checked by `require_interactive()`.
+  The check is capability-based, not parent-name-based, so any controller
+  that allocates a real PTY is accepted -- a shell, a terminal
+  multiplexer, an editor, or another agent controller such as Codex
+  launched with `tty: true`. Pipes, redirected input/output, and
+  cron-style launches have no TTY on stdin/stdout and are rejected. The
+  earlier parent-executable allow-list guarded no invariant this TTY
+  check does not already cover and is gone. Sub-agents are exempt
   through `CEREBRO_SESSION_ID`, which is exactly how subcommands run
   inside the orchestrator's non-TTY Bash tool. Children themselves are
   launched with `env -u CEREBRO_SESSION_ID -u CEREBRO_SESSION_DIR` so a

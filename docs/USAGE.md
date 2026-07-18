@@ -403,8 +403,11 @@ Options and their defaults (all optional):
 
 Two deliberate limits to know about:
 
-* **Interactive-only.** `cerebro` refuses to run under a non-terminal
-  parent (pipes, scripts, cron). The sub-agents the orchestrator
+* **Interactive-only.** `cerebro` requires a genuine interactive TTY on
+  stdin and stdout. Any controller that allocates a real PTY works -- a
+  shell, a terminal multiplexer, an editor, or another agent such as
+  Codex launched with `tty: true`. Pipes, redirected input/output, and
+  cron-style launches are rejected. The sub-agents the orchestrator
   spawns are exempt.
 * **No concurrency control.** cerebro won't stop you from running two
   mutating operations against the same repo at once, within or across
