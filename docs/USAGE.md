@@ -232,6 +232,92 @@ ACP orchestrator is a sequence of per-turn upstream sessions, not a persistent
 pairable process. `cerebro list` shows ACP-created sessions and `cerebro
 --resume <id>` works on them like any other.
 
+## Drive it from another agent (PTY MCP)
+
+`cerebro pty-mcp` starts a **generic terminal MCP server**
+(`lib/python/pty_mcp_server.py`) over stdio on the official `mcp` Python SDK.
+It owns long-lived pseudo-terminals in its own process and exposes them as MCP
+tools, so a controller — another agent, an editor, a test harness — can spawn an
+**interactive TTY program**, send it input, and get resumed on a real event
+(idle / regex match / child exit) **without polling**. cerebro is one client;
+the surface drives any interactive program (anything that needs a real PTY and
+rejects pipes), not just cerebro.
+
+This is what lets an agent controller autonomously drive cerebro's interactive
+chat (which requires a genuine TTY): the MCP server holds the PTY across turns,
+and the controller issues one blocking `pty_wait` per event boundary instead of
+polling.
+
+### Tools
+
+* `pty_spawn({command, args?, cwd, env?, cols?, rows?}) -> {sessionId, pid}` —
+  allocate a PTY and exec the program (no shell; `command` resolved via PATH).
+  `cwd` is required. **Executes arbitrary code — shell-equivalent.**
+* `pty_send({sessionId, text?, key?}) -> {ok, bytesWritten}` — write raw UTF-8
+  `text` and/or a `key` (`enter`, `ctrl-c`, `ctrl-d`, `esc`, `tab`, `up`, `down`,
+  `left`, `right`, `home`, `end`, `backspace`, `delete`, `pageup`, `pagedown`).
+  `text` is sent first, then the key (e.g. `"world"` then `enter`). Safe to call
+  while a `pty_wait` is waiting on the same session.
+* `pty_wait({sessionId, idleMs?=1500, match?, timeoutMs?=30000}) -> {event, …,
+  tail, cursor}` — **the event primitive**. Blocks server-side and returns on
+  the first of: `exit` (child died; `exitCode` set), `match` (regex found in text
+  appended since this call started), `idle` (output was seen AND the session has
+  been quiet for `idleMs`), or `timeout` (`timeoutMs` elapsed, capped at 120000).
+  `tail` is the normalized text appended since this call started; `cursor` is the
+  new read cursor. Re-issue after a `timeout` to keep waiting.
+* `pty_read({sessionId, sinceCursor?, tailLines?}) -> {text, cursor, ended}` —
+  non-blocking incremental read (since a cursor from a prior wait/read) or last-N
+  lines.
+* `pty_status`, `pty_resize`, `pty_kill({signal?})`, `pty_close` (retire a
+  session; idempotent), `pty_list`.
+
+### Usage pattern (event-driven, no polling)
+
+Capture the cursor, send input, then **one `pty_wait` per event boundary**. A
+fast program may finish before the `pty_wait` even starts watching — in that case
+the wait returns `exit` with an empty `tail`, and the response text is still in
+the buffer: read it with `pty_read(sinceCursor=<the cursor you captured before
+the send>)`. Output is ANSI-normalized (escape sequences stripped; `\r\n` line
+endings kept; `\r`-spinner frames collapsed to their final state).
+
+```text
+w1 = pty_wait(sessionId, idleMs=800)        # blocks until the prompt appears
+c  = w1.cursor
+pty_send(sessionId, text="do the thing", key="enter")
+w2 = pty_wait(sessionId, idleMs=1500)        # blocks until it goes quiet / exits
+reply = pty_read(sessionId, sinceCursor=c)   # full text since before the send
+```
+
+Many agents can drive many sessions at once: each session has its own reader
+thread and condition lock, and every tool offloads its blocking work to a
+threadpool worker so the MCP event loop stays free for concurrent calls.
+
+### Register it with an MCP client
+
+For Claude Code (available across repos with `-s user`; `cerebro` must be on
+PATH):
+
+```bash
+claude mcp add pty -s user -- cerebro pty-mcp
+```
+
+Then refresh the session so the `pty_*` tools load. The server reads no
+server-wide config and is owned by the MCP client, so — unlike `cerebro acp` —
+there is **no `pty-mcp restart`**: if it misbehaves, reconnect via the client
+(session restart), not a cerebro subcommand. PTY children self-clean (SIGHUP on
+master close + an `atexit` SIGTERM) when the server exits.
+
+### Dependencies
+
+Python **≥ 3.10** plus the `mcp` package. `cerebro pty-mcp` prefers Homebrew's
+`python3` (`/opt/homebrew/bin/python3`) — macOS system python3 is 3.9, too old —
+and auto-installs the SDK to your user site on first run if it's missing:
+
+```bash
+brew install python
+/opt/homebrew/bin/python3 -m pip install --user --break-system-packages mcp
+```
+
 ## Resume and interrupted work
 
 Sessions are durable. `cerebro --resume <id>` (or the picker) drops
