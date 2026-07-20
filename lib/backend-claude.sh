@@ -91,6 +91,8 @@ backend_claude_child_run() {
         child_log="$6" msg_capture="$7" id_capture="$8" store_file="$9" ckey="${10}"
   local model="${11:-$CEREBRO_MODEL}"
 
+  playwright_isolate_child
+
   backend_claude_endpoint_env "$model"
 
   if (( pair )); then
@@ -289,6 +291,7 @@ backend_claude_pair_run() {
   local cwd="$1" prompt="$2" role="$3" resume="$4" child_log="$5" \
         msg_capture="$6" id_capture="$7" store_file="$8" ckey="$9" \
         model="${10:-$CEREBRO_MODEL}"
+  playwright_isolate_child
   local sys_prompt; sys_prompt="$(child_sys_prompt "$role")"
   local opts=(-p --permission-mode bypassPermissions
     --allowedTools "$(backend_claude_child_allowed_tools "$role")"

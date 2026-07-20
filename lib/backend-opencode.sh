@@ -39,6 +39,8 @@ backend_opencode_child_run() {
         child_log="$6" msg_capture="$7" id_capture="$8" store_file="$9" ckey="${10}"
   local model="${11:-$CEREBRO_MODEL}"
 
+  playwright_isolate_child
+
   if (( pair )); then
     backend_opencode_pair_run "$cwd" "$prompt" "$agent" "$resume" \
       "$child_log" "$msg_capture" "$id_capture" "$store_file" "$ckey" "$model"
@@ -80,6 +82,7 @@ backend_opencode_resume_run() {
         msg_capture="$6" id_capture="$7" store_file="$8" ckey="$9" \
         model="${10:-$CEREBRO_MODEL}"
   local port serve_pid base_url fifo steer pump_log rc
+  playwright_isolate_child
   port="$(backend_opencode_pair_free_port)"
   base_url="http://127.0.0.1:$port"
   ( cd "$cwd" && exec env -u CEREBRO_SESSION_ID -u CEREBRO_SESSION_DIR \
@@ -207,6 +210,8 @@ backend_opencode_pair_free_port() {
 backend_opencode_pair_begin() {
   local role="$1" repo="$2" branch="${3:-}" child_log="$4" resume="${5:-}"
   local label; label="$(pair_label "$role" "$repo" "$branch")"
+
+  playwright_isolate_child
 
   PAIR_PORT="$(backend_opencode_pair_free_port)"
   PAIR_BASE_URL="http://127.0.0.1:$PAIR_PORT"

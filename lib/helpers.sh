@@ -385,6 +385,21 @@ log_event() {
     >> "$file" 2>/dev/null || true
 }
 
+# playwright_isolate_child -- conditionally export the @playwright/mcp
+# isolation flag for a child process. @playwright/mcp inherits the env from the
+# launching CLI (opencode or claude), so exporting here propagates
+# PLAYWRIGHT_MCP_ISOLATED=1 to the MCP subprocess, making it use an in-memory
+# browser profile instead of the shared on-disk persistent profile. That shared
+# profile is single-owner (Chromium SingletonLock), so without this two
+# concurrent cerebro children collide and the second one fails (rc=4) fighting
+# the lock. In-memory profiles also make verify runs deterministic (no stale
+# cookies from prior runs). Call this at the top of every child launch fn
+# (both backends). Set CEREBRO_PLAYWRIGHT_ISOLATED=0 to restore the old shared
+# persistent profile (sequential-only) behaviour.
+playwright_isolate_child() {
+  [[ "${CEREBRO_PLAYWRIGHT_ISOLATED:-1}" != "0" ]] && export PLAYWRIGHT_MCP_ISOLATED=1
+}
+
 # Timeout fallback chain (copied from bin/tai).
 # CEREBRO_TIMEOUT unset/empty/0/none/unlimited => no cap: run the child
 # directly (TIMEOUT_CMD=(env)), so the perl alarm path can never fire.

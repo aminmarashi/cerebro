@@ -397,6 +397,7 @@ Options and their defaults (all optional):
 | `pair_stall_backoff` | `CEREBRO_PAIR_STALL_BACKOFF` | base (s) for the exponential restart backoff | `5` |
 | `opencode_cmd` | `CEREBRO_OPENCODE_CMD` | opencode executable | `opencode` |
 | `claude_cmd` | `CEREBRO_CLAUDE_CMD` | claude executable | `claude` |
+| `playwright_isolated` | `CEREBRO_PLAYWRIGHT_ISOLATED` | isolate the @playwright/mcp browser profile per child (in-memory) so concurrent browser-capable children don't collide on Chromium's SingletonLock; set `0` to keep the shared persistent profile (sequential-only) | `1` |
 | `overlay_cap` | `CEREBRO_OVERLAY_CAP` | max chars in a single harness overlay file | `4000` |
 | `meta_horizon` | `CEREBRO_META_HORIZON` | fast-loop runs between meta-skill (`--meta`) runs | `2` |
 | `debug` | `CEREBRO_DEBUG` | `1` for verbose logs | `0` |

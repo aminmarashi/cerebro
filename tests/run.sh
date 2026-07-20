@@ -4454,6 +4454,71 @@ else
   fail=$((fail + 1)); failures+=("197 PTY-intr :: rc=$rc197")
 fi
 
+# ========================================================================
+# 198x. playwright_isolate_child -- the @playwright/mcp browser profile is
+# isolated per cerebro child (in-memory) so concurrent browser-capable children
+# don't collide on Chromium's SingletonLock. Unit check of the helper plus a
+# wiring grep over the 5 child launch sites.
+# ========================================================================
+
+# --- 198a. playwright_isolate_child exports PLAYWRIGHT_MCP_ISOLATED=1 by
+# default, and exports nothing when CEREBRO_PLAYWRIGHT_ISOLATED=0. ---
+iso_default="$(bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  playwright_isolate_child
+  printenv PLAYWRIGHT_MCP_ISOLATED' _ "$here/../lib" 2>/dev/null)"
+iso_optout="$(CEREBRO_PLAYWRIGHT_ISOLATED=0 bash -c '
+  set -uo pipefail
+  CEREBRO_LIB_DIR="$1"
+  . "$CEREBRO_LIB_DIR/config.sh"
+  . "$CEREBRO_LIB_DIR/helpers.sh"
+  playwright_isolate_child
+  printenv PLAYWRIGHT_MCP_ISOLATED' _ "$here/../lib" 2>/dev/null)"
+if [[ "$iso_default" == "1" && -z "$iso_optout" ]]; then
+  printf 'PASS  198a playwright_isolate_child default=1, opt-out=none\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  198a playwright_isolate_child [default=%s optout=%s]\n' "$iso_default" "$iso_optout"; fail=$((fail + 1))
+  failures+=("198a playwright_isolate_child :: default=$iso_default optout=$iso_optout")
+fi
+
+# --- 198b. the 5 child launch fns call playwright_isolate_child; the
+# orchestrator/observer/resume-orchestrator launch fns do NOT. ---
+# fn_body_has <file> <fn-name> -- 0 if <fn>'s body contains the helper call, 1
+# otherwise. A fn body spans from its top-level def line to the next top-level
+# def line (or EOF).
+fn_body_has() {
+  local file="$1" fn="$2"
+  local start next
+  start=$(grep -nE "^${fn}\(\)" "$file" | head -1 | cut -d: -f1)
+  [[ -n "$start" ]] || return 1
+  next=$(awk -v s="$start" 'NR>s && /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/ {print NR; exit}' "$file")
+  [[ -z "$next" ]] && next=$(($(wc -l <"$file" | tr -d ' ') + 1))
+  awk -v s="$start" -v e="$next" 'NR>s && NR<e && /playwright_isolate_child/ {found=1} END{exit !found}' "$file"
+}
+oc_file="$here/../lib/backend-opencode.sh"
+cl_file="$here/../lib/backend-claude.sh"
+child_hits=0 forbidden_hits=0
+for fn in backend_opencode_child_run backend_opencode_resume_run backend_opencode_pair_begin \
+         backend_claude_child_run backend_claude_pair_run; do
+  [[ "$fn" == *opencode* ]] && file="$oc_file" || file="$cl_file"
+  fn_body_has "$file" "$fn" && child_hits=$((child_hits + 1))
+done
+for fn in backend_opencode_launch_orchestrator backend_opencode_launch_observer \
+         backend_opencode_resume_orchestrator backend_claude_launch_orchestrator \
+         backend_claude_launch_observer backend_claude_resume_orchestrator; do
+  [[ "$fn" == *opencode* ]] && file="$oc_file" || file="$cl_file"
+  if fn_body_has "$file" "$fn"; then forbidden_hits=$((forbidden_hits + 1)); fi
+done
+if (( child_hits == 5 && forbidden_hits == 0 )); then
+  printf 'PASS  198b 5 child launch fns isolate; orchestrator/observer/resume do not\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  198b wiring [child=%s forbidden=%s]\n' "$child_hits" "$forbidden_hits"; fail=$((fail + 1))
+  failures+=("198b wiring :: child=$child_hits forbidden=$forbidden_hits")
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 if (( fail > 0 )); then
   printf '\nFailures:\n'
