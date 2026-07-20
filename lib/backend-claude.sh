@@ -181,7 +181,7 @@ backend_claude_launch_orchestrator() {
     --session-id "$sid" \
     --append-system-prompt-file "$prompt_file" \
     --permission-mode bypassPermissions \
-    --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Write(/tmp/cerebro-$sid/**)"
+    --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Skill Write(/tmp/cerebro-$sid/**)"
 }
 
 # backend_claude_launch_observer <sess_dir> <prompt> <target> -- exec the
@@ -223,7 +223,7 @@ backend_claude_resume_orchestrator() {
       --resume "$id" \
       --append-system-prompt-file "$prompt_file" \
       --permission-mode bypassPermissions \
-      --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Write(/tmp/cerebro-$sid/**)"
+      --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Skill Write(/tmp/cerebro-$sid/**)"
   else
     # Bare resume: claude shows its own picker. The hook writes the
     # current-session symlink as soon as the user submits their first prompt.
@@ -231,7 +231,7 @@ backend_claude_resume_orchestrator() {
       --resume \
       --append-system-prompt-file "$prompt_file" \
       --permission-mode bypassPermissions \
-      --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Write(/tmp/cerebro-$sid/**)"
+      --allowedTools "Bash(cerebro:*) Read Grep Glob WebSearch WebFetch mcp__playwright__* Skill Write(/tmp/cerebro-$sid/**)"
   fi
 }
 

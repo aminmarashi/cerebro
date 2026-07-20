@@ -422,12 +422,41 @@ build_timeout_cmd() {
 # system prompt.
 materialise_home() {
   mkdir -p "$CEREBRO_HOME/.opencode/agent" "$CEREBRO_HOME/.opencode/plugin" \
+    "$CEREBRO_HOME/.claude/skills" "$CEREBRO_HOME/guides" \
     "$CEREBRO_HOME/sessions" "$CEREBRO_HOME/templates" "$CEREBRO_HOME/overlays" \
     || die "cannot create $CEREBRO_HOME"
 
   # Shared system prompt (read by the claude backend; also the core of the
   # opencode orchestrator agent).
   write_if_changed "$CEREBRO_HOME/system-prompt.md" "$(cerebro_system_prompt)"
+
+  # Progressive-load skills + their opencode guide copies. Each shipped
+  # lib/payloads/skills/<topic>/SKILL.md is materialised verbatim as a Claude
+  # Code project skill at $CEREBRO_HOME/.claude/skills/<topic>/SKILL.md (the
+  # orchestrator runs with cwd $CEREBRO_HOME, so it discovers them and can
+  # load a body on demand via the Skill tool, keeping the always-loaded prompt
+  # small). The SAME source is also materialised as a plain guide with the
+  # YAML frontmatter stripped at $CEREBRO_HOME/guides/<topic>.md, which the
+  # opencode backend (no Skill tool / SKILL.md format) Reads directly. Globbing
+  # the skills dir means a new skill ships by just dropping a subdir, with no
+  # update needed here.
+  local sk_dir sk_topic sk_guide sk_src
+  sk_dir="$(cerebro_skills_dir)"
+  if [[ -d "$sk_dir" ]]; then
+    for sk_src in "$sk_dir"/*/SKILL.md; do
+      [[ -f "$sk_src" ]] || continue
+      sk_topic="$(basename "$(dirname "$sk_src")")"
+      # The claude skill keeps the cerebro-<topic> dir/name; the opencode guide
+      # drops the cerebro- prefix so the orchestrator prompt's stubs (which
+      # reference $CEREBRO_HOME/guides/<topic>.md) point at the real file.
+      sk_guide="${sk_topic#cerebro-}"
+      mkdir -p "$CEREBRO_HOME/.claude/skills/$sk_topic"
+      write_if_changed "$CEREBRO_HOME/.claude/skills/$sk_topic/SKILL.md" \
+        "$(cat "$sk_src")"
+      write_if_changed "$CEREBRO_HOME/guides/$sk_guide.md" \
+        "$(cerebro_skill_body "$sk_src")"
+    done
+  fi
 
   # The opencode config tree is shared: the reviewer agent always runs under
   # opencode, and the opencode editing backend's child agents live here too.
