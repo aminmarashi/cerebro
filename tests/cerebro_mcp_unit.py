@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Unit tests for the PTY MCP ANSI stream parser (lib/python/pty_mcp_ansi.py).
+"""Unit tests for the PTY MCP ANSI stream parser (lib/python/cerebro_mcp_ansi.py).
 
 Pure stdlib (no third-party deps), so this runs on the suite's baseline
 python3 (3.9 OK) -- Pattern A, always runs. The parser is the part worth
 pinning: it turns raw PTY bytes into the normalized text the MCP server's
-pty_wait/pty_read return, so a regression here (a missed ANSI strip, a broken
+cerebro_wait/cerebro_read return, so a regression here (a missed ANSI strip, a broken
 spinner collapse, a miscounted tail) would surface as garbled event text to
 every controller.
 
@@ -15,7 +15,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib", "python"))
 
-from pty_mcp_ansi import AnsiStreamParser  # noqa: E402
+from cerebro_mcp_ansi import AnsiStreamParser  # noqa: E402
 
 
 def _feed(parser, data):

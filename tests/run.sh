@@ -4520,46 +4520,46 @@ else
 fi
 
 # ========================================================================
-# 199. PTY MCP ANSI parser (lib/python/pty_mcp_ansi.py) -- the pure-stdlib
-# normalizer that turns raw PTY bytes into the text pty_wait/pty_read return.
+# 199. PTY MCP ANSI parser (lib/python/cerebro_mcp_ansi.py) -- the pure-stdlib
+# normalizer that turns raw PTY bytes into the text cerebro_wait/cerebro_read return.
 # Pattern A (always runs, 3.9 OK): ANSI strip, \r spinner collapse, CRLF line
 # endings (PTY ONLCR) keep content, \b/\t, incremental cursor/text_since,
 # tail_lines, UTF-8 split across feeds, buffer cap.
 # ========================================================================
-pty_unit_out="$(python3 "$here/pty_mcp_unit.py" 2>&1)"
-if [[ "$pty_unit_out" == *"all checks passed"* ]]; then
+cerebro_unit_out="$(python3 "$here/cerebro_mcp_unit.py" 2>&1)"
+if [[ "$cerebro_unit_out" == *"all checks passed"* ]]; then
   printf 'PASS  199  PTY MCP ANSI parser unit\n'; pass=$((pass + 1))
 else
-  printf 'FAIL  199  PTY MCP ANSI parser unit [out=%s]\n' "$pty_unit_out"; fail=$((fail + 1))
-  failures+=("199 pty-mcp parser unit :: $pty_unit_out")
+  printf 'FAIL  199  PTY MCP ANSI parser unit [out=%s]\n' "$cerebro_unit_out"; fail=$((fail + 1))
+  failures+=("199 cerebro-mcp parser unit :: $cerebro_unit_out")
 fi
 
 # ========================================================================
-# 200. PTY MCP server (lib/python/pty_mcp_server.py) end-to-end over stdio.
+# 200. PTY MCP server (lib/python/cerebro_mcp_server.py) end-to-end over stdio.
 # Pattern B (gated on Python >=3.10 + the `mcp` SDK; SKIP when absent): the test
 # IS the MCP client -- it spawns the server, does the initialize handshake,
-# asserts tools/list exposes the 9 pty_* tools, then drives a trivial
-# interactive program through pty_spawn -> pty_wait -> pty_send -> pty_read ->
-# pty_wait(exit) -> pty_status -> pty_close -> pty_list. Mirrors the ACP relay
+# asserts tools/list exposes the 9 cerebro_* tools, then drives a trivial
+# interactive program through cerebro_spawn -> cerebro_wait -> cerebro_send -> cerebro_read ->
+# cerebro_wait(exit) -> cerebro_status -> cerebro_close -> cerebro_list. Mirrors the ACP relay
 # gating at block 177.
 # ========================================================================
-PTY_MCP_PY=""
+CEREBRO_MCP_PY=""
 for _cand in /opt/homebrew/bin/python3 python3 python3.13 python3.12 python3.11 python3.10; do
   _p="$(command -v "$_cand" 2>/dev/null)" || continue
   [[ -x "$_p" ]] || continue
   if "$_p" -c 'import sys,mcp; sys.exit(0 if sys.version_info[:2]>=(3,10) else 1)' 2>/dev/null; then
-    PTY_MCP_PY="$_p"; break
+    CEREBRO_MCP_PY="$_p"; break
   fi
 done
-if [[ -n "$PTY_MCP_PY" ]]; then
-  pty_srv_out="$("$PTY_MCP_PY" "$here/pty_mcp_server.py" "$here/.." 2>"$WORKDIR/stderr")"
-  pty_srv_rc=$?
-  pty_srv_err="$(cat "$WORKDIR/stderr")"
-  if [[ $pty_srv_rc -eq 0 && "$pty_srv_out" == *"all checks passed"* ]]; then
+if [[ -n "$CEREBRO_MCP_PY" ]]; then
+  cerebro_srv_out="$("$CEREBRO_MCP_PY" "$here/cerebro_mcp_server.py" "$here/.." 2>"$WORKDIR/stderr")"
+  cerebro_srv_rc=$?
+  cerebro_srv_err="$(cat "$WORKDIR/stderr")"
+  if [[ $cerebro_srv_rc -eq 0 && "$cerebro_srv_out" == *"all checks passed"* ]]; then
     printf 'PASS  200  PTY MCP server e2e (spawn/wait/send/read/exit/close over stdio)\n'; pass=$((pass + 1))
   else
-    printf 'FAIL  200  PTY MCP server e2e [rc=%d out=%s err=%s]\n' "$pty_srv_rc" "$pty_srv_out" "$pty_srv_err"; fail=$((fail + 1))
-    failures+=("200 pty-mcp server e2e :: rc=$pty_srv_rc out=$pty_srv_out err=$pty_srv_err")
+    printf 'FAIL  200  PTY MCP server e2e [rc=%d out=%s err=%s]\n' "$cerebro_srv_rc" "$cerebro_srv_out" "$cerebro_srv_err"; fail=$((fail + 1))
+    failures+=("200 cerebro-mcp server e2e :: rc=$cerebro_srv_rc out=$cerebro_srv_out err=$cerebro_srv_err")
   fi
 else
   printf 'SKIP  200  PTY MCP server e2e (mcp SDK / Python >=3.10 unavailable)\n'

@@ -5,13 +5,13 @@
 # and exposes them over MCP so a controller (another agent, an editor, a test)
 # can spawn an interactive TTY program, send it input, and wait on real events
 # (idle / pattern match / child exit) without polling. cerebro is one client;
-# the surface drives any interactive program. Launched by `cerebro pty-mcp`
-# (lib/commands/pty_mcp.sh) or directly: `python3 lib/python/pty_mcp_server.py`.
+# the surface drives any interactive program. Launched by `cerebro cerebro-mcp`
+# (lib/commands/cerebro_mcp.sh) or directly: `python3 lib/python/cerebro_mcp_server.py`.
 #
 # stdout is the MCP JSON-RPC pipe (owned by the mcp SDK); all diagnostics go to
 # stderr via _log. Mirrors lib/python/acp_server.py's idiom. The PTY allocation
 # idiom (pty.fork + termios echo-off + select drain) mirrors tests/pty_run.py.
-# The ANSI -> normalized-text parser (lib/python/pty_mcp_ansi.py) is pure stdlib
+# The ANSI -> normalized-text parser (lib/python/cerebro_mcp_ansi.py) is pure stdlib
 # and unit-tested separately.
 #
 # Concurrency: FastMCP calls a SYNC tool directly on the event-loop thread
@@ -21,8 +21,8 @@
 # stays free and concurrent tool calls run in parallel threadpool workers. Each
 # session owns a dedicated daemon reader thread + a threading.Condition, so many
 # agents can drive many sessions at once (independent readers + locks -> true
-# parallelism), and pty_send/pty_read on a session proceed concurrently with a
-# pty_wait that is waiting on that session (cond.wait releases the lock).
+# parallelism), and cerebro_send/cerebro_read on a session proceed concurrently with a
+# cerebro_wait that is waiting on that session (cond.wait releases the lock).
 from __future__ import annotations
 
 import anyio
@@ -45,18 +45,18 @@ from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from pty_mcp_ansi import AnsiStreamParser
+from cerebro_mcp_ansi import AnsiStreamParser
 
-mcp = FastMCP("cerebro-pty")
+mcp = FastMCP("cerebro-mcp")
 
 
 def _log(msg: str) -> None:
     """Diagnostics to stderr (stdout is the JSON-RPC pipe)."""
-    print(f"cerebro pty-mcp: {msg}", file=sys.stderr, flush=True)
+    print(f"cerebro cerebro-mcp: {msg}", file=sys.stderr, flush=True)
 
 
 MAX_SESSIONS = 64
-_MAX_WAIT_MS = 120_000          # cap pty_wait timeout under the harness call cap
+_MAX_WAIT_MS = 120_000          # cap cerebro_wait timeout under the harness call cap
 _SELECT_TICK = 0.1              # reader select timeout + wait re-check interval
 
 
@@ -111,7 +111,7 @@ class Session:
         self.cond = threading.Condition()
         self._closing = False
         self._reader = threading.Thread(
-            target=self._read_loop, name=f"pty-reader-{session_id}", daemon=True)
+            target=self._read_loop, name=f"cerebro-reader-{session_id}", daemon=True)
         self._reader.start()
 
     # -- reader thread: drain master_fd -> parser, detect exit, reap, notify --
@@ -140,7 +140,7 @@ class Session:
                     # EOF on the master: the child has (almost certainly) exited.
                     # Bounded-reap so exit_code is set before we leave the loop --
                     # a WNOHANG at this instant can race the exit by a hair and
-                    # leave exit_code None, which would make a pty_wait that fires
+                    # leave exit_code None, which would make a cerebro_wait that fires
                     # on `not alive` report exitCode=None.
                     self._reap_exit()
                     break
@@ -217,7 +217,7 @@ class Session:
             self.cond.notify_all()
         return True
 
-    # -- teardown (called from a tool thread via pty_close) --
+    # -- teardown (called from a tool thread via cerebro_close) --
 
     def close(self, sig_name: str = "TERM") -> None:
         self._closing = True
@@ -311,12 +311,12 @@ def _spawn_impl(command: str, args: list[str], cwd: str,
         try:
             os.chdir(cwd)
         except OSError as e:
-            sys.stderr.write(f"cerebro pty-mcp: chdir failed: {e}\n")
+            sys.stderr.write(f"cerebro cerebro-mcp: chdir failed: {e}\n")
             os._exit(126)
         try:
             os.execvpe(command, argv, child_env)
         except OSError as e:
-            sys.stderr.write(f"cerebro pty-mcp: exec failed: {e}\n")
+            sys.stderr.write(f"cerebro cerebro-mcp: exec failed: {e}\n")
             os._exit(127)
         os._exit(127)
 
@@ -506,7 +506,7 @@ def _list_impl() -> dict[str, Any]:
 # blocking _impl_* helpers take snake_case and are called positionally.
 
 @mcp.tool()
-async def pty_spawn(command: str, cwd: str,
+async def cerebro_spawn(command: str, cwd: str,
                     args: list[str] | None = None,
                     env: dict[str, str | None] | None = None,
                     cols: int = 80, rows: int = 24) -> str:
@@ -514,24 +514,24 @@ async def pty_spawn(command: str, cwd: str,
     shell-equivalent. `command` is resolved via PATH (no shell); `args` is the
     argv tail; `cwd` (required) must exist; `env` optionally sets/overrides vars
     (set a value to null to unset it; otherwise inherits this server's env).
-    Returns {"sessionId","pid"} or {"error"}. Close with pty_close when done."""
+    Returns {"sessionId","pid"} or {"error"}. Close with cerebro_close when done."""
     return _json(await anyio.to_thread.run_sync(
         _spawn_impl, command, list(args or []), cwd, env, cols, rows))
 
 
 @mcp.tool()
-async def pty_send(sessionId: str, text: str | None = None,
+async def cerebro_send(sessionId: str, text: str | None = None,
                    key: str | None = None) -> str:
     """Send input to a session's PTY. `text` is written as raw UTF-8 bytes; `key`
     is one of: enter, ctrl-c, ctrl-d, esc, tab, up, down, left, right, home, end,
     backspace, delete, pageup, pagedown. Both may be given (text then key). Safe
-    to call while a pty_wait is waiting on the same session. Returns
+    to call while a cerebro_wait is waiting on the same session. Returns
     {"ok","bytesWritten"} or {"error"}."""
     return _json(await anyio.to_thread.run_sync(_send_impl, sessionId, text, key))
 
 
 @mcp.tool()
-async def pty_wait(sessionId: str, idleMs: int = 1500,
+async def cerebro_wait(sessionId: str, idleMs: int = 1500,
                    match: str | None = None, timeoutMs: int = 30000) -> str:
     """Block until the next event on a session and return it. The call itself is
     the wake-up -- issue one call per event boundary, no polling loop. Returns on
@@ -546,7 +546,7 @@ async def pty_wait(sessionId: str, idleMs: int = 1500,
 
 
 @mcp.tool()
-async def pty_read(sessionId: str, sinceCursor: int | None = None,
+async def cerebro_read(sessionId: str, sinceCursor: int | None = None,
                    tailLines: int | None = None) -> str:
     """Read normalized (ANSI-stripped) output from a session, non-blocking. With
     `sinceCursor`: returns text appended at/after that cursor (use the cursor
@@ -557,26 +557,26 @@ async def pty_read(sessionId: str, sinceCursor: int | None = None,
 
 
 @mcp.tool()
-async def pty_status(sessionId: str) -> str:
+async def cerebro_status(sessionId: str) -> str:
     """Snapshot one session: alive, exitCode, pid, command, cwd, bufferedLines."""
     return _json(await anyio.to_thread.run_sync(_status_impl, sessionId))
 
 
 @mcp.tool()
-async def pty_resize(sessionId: str, cols: int, rows: int) -> str:
+async def cerebro_resize(sessionId: str, cols: int, rows: int) -> str:
     """Resize a session's PTY (sends SIGWINCH to the child). Returns {"ok"}."""
     return _json(await anyio.to_thread.run_sync(_resize_impl, sessionId, cols, rows))
 
 
 @mcp.tool()
-async def pty_kill(sessionId: str, signal: str = "TERM") -> str:
+async def cerebro_kill(sessionId: str, signal: str = "TERM") -> str:
     """Send a signal to a session's child (default TERM). Does NOT remove the
-    session -- the reader reaps the exit; call pty_close to retire it."""
+    session -- the reader reaps the exit; call cerebro_close to retire it."""
     return _json(await anyio.to_thread.run_sync(_kill_impl, sessionId, signal))
 
 
 @mcp.tool()
-async def pty_close(sessionId: str) -> str:
+async def cerebro_close(sessionId: str) -> str:
     """Tear down a session: signal+reap the child if still alive, stop the reader,
     close the PTY, and remove it from the registry. Idempotent. Call when done so
     the server doesn't hold dead sessions."""
@@ -584,7 +584,7 @@ async def pty_close(sessionId: str) -> str:
 
 
 @mcp.tool()
-async def pty_list() -> str:
+async def cerebro_list() -> str:
     """List all live sessions: [{"sessionId","alive","command","cwd"}]."""
     return _json(await anyio.to_thread.run_sync(_list_impl))
 

@@ -2,8 +2,8 @@
 # cerebro PTY MCP: ANSI stream parser -> normalized line buffer.
 #
 # Pure stdlib (no third-party deps), so it is independently unit-testable on a
-# Python that does not have the `mcp` SDK installed. pty_mcp_server.py imports
-# this; tests/pty_mcp_unit.py exercises it directly.
+# Python that does not have the `mcp` SDK installed. cerebro_mcp_server.py imports
+# this; tests/cerebro_mcp_unit.py exercises it directly.
 #
 # Stateful incremental parser: raw bytes -> normalized text. Strips CSI/OSC/DCS/
 # APC and other ESC sequences. `\r` returns to column 0 but does not clear the

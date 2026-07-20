@@ -31,10 +31,10 @@ main() {
     # external entry point; it dispatches to `mint` and `set-foreign` itself
     # (called by the python ACP server over `cerebro acp <name>`).
     acp) shift; cmd_acp "$@" ;;
-    # PTY MCP server: a generic terminal MCP (lib/python/pty_mcp_server.py) that
+    # cerebro MCP server: a generic terminal MCP (lib/python/cerebro_mcp_server.py) that
     # holds long-lived PTYs and exposes them as MCP tools so a controller can
     # drive an interactive TTY program (cerebro or any other) event-driven.
-    pty-mcp) shift; cmd_pty_mcp "$@" ;;
+    cerebro-mcp) shift; cmd_cerebro_mcp "$@" ;;
     answer) shift; cmd_answer "$@" ;;
     models)  shift; cmd_models "$@" ;;
     model-env) shift; cmd_model_env "$@" ;;

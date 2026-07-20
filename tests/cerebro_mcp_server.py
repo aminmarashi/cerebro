@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""End-to-end test for the cerebro PTY MCP server (lib/python/pty_mcp_server.py).
+"""End-to-end test for the cerebro PTY MCP server (lib/python/cerebro_mcp_server.py).
 
 This harness is the MCP CLIENT. It spawns the server over stdio, speaks
 newline-delimited JSON-RPC 2.0 (initialize -> notifications/initialized ->
 tools/list -> tools/call), and drives a trivial interactive program through the
 real tool surface:
 
-  pty_spawn(python3 -u -c 'print("hello-pty"); x=input(); print("got:"+x)')
-  pty_wait  -> tail contains "hello-pty"
-  pty_send  "world" + enter
-  pty_wait  -> tail contains "got:world"
-  pty_wait  -> event == "exit", exitCode == 0
-  pty_close
+  cerebro_spawn(python3 -u -c 'print("hello-pty"); x=input(); print("got:"+x)')
+  cerebro_wait  -> tail contains "hello-pty"
+  cerebro_send  "world" + enter
+  cerebro_wait  -> tail contains "got:world"
+  cerebro_wait  -> event == "exit", exitCode == 0
+  cerebro_close
 
 Requires the official `mcp` Python SDK on a Python >= 3.10; skipped when absent
 (Pattern B, like tests/acp/relay_test.py). Run by tests/run.sh.
-Usage: pty_mcp_server_test.py <repo-root>"""
+Usage: cerebro_mcp_server_test.py <repo-root>"""
 from __future__ import annotations
 
 import json
@@ -26,7 +26,7 @@ import tempfile
 import time
 
 REPO = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SERVER = os.path.join(REPO, "lib", "python", "pty_mcp_server.py")
+SERVER = os.path.join(REPO, "lib", "python", "cerebro_mcp_server.py")
 
 PY = sys.executable  # the interpreter run.sh picked (has `mcp` installed)
 
@@ -143,7 +143,7 @@ def main() -> None:
         init = client.request("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "pty-mcp-test", "version": "1"},
+            "clientInfo": {"name": "cerebro-mcp-test", "version": "1"},
         })
         check("serverInfo" in init, "initialize returns serverInfo")
         client.notify("notifications/initialized")
@@ -151,68 +151,68 @@ def main() -> None:
         # --- tools/list: our 9 tools are registered ---
         listed = client.request("tools/list", {})
         names = {t["name"] for t in listed.get("tools", [])}
-        expect = {"pty_spawn", "pty_send", "pty_wait", "pty_read", "pty_status",
-                  "pty_resize", "pty_kill", "pty_close", "pty_list"}
-        check(names == expect, f"tools/list exposes the 9 pty_* tools (got {sorted(names)})")
+        expect = {"cerebro_spawn", "cerebro_send", "cerebro_wait", "cerebro_read", "cerebro_status",
+                  "cerebro_resize", "cerebro_kill", "cerebro_close", "cerebro_list"}
+        check(names == expect, f"tools/list exposes the 9 cerebro_* tools (got {sorted(names)})")
 
         # --- drive a trivial interactive program end-to-end ---
         with tempfile.TemporaryDirectory() as cwd:
-            spawn = client.call_tool("pty_spawn", {
+            spawn = client.call_tool("cerebro_spawn", {
                 "command": PY, "args": ["-u", "-c", CHILD_SCRIPT], "cwd": cwd,
             })
             check("sessionId" in spawn and "pid" in spawn,
-                  f"pty_spawn returns sessionId+pid (got {spawn})")
+                  f"cerebro_spawn returns sessionId+pid (got {spawn})")
             sid = spawn["sessionId"]
 
             # wait for the first marker (event-driven; no polling loop)
-            w1 = client.call_tool("pty_wait", {
+            w1 = client.call_tool("cerebro_wait", {
                 "sessionId": sid, "idleMs": 800, "timeoutMs": 15000,
             })
             check("hello-pty" in w1.get("tail", ""),
-                  f"pty_wait sees 'hello-pty' (event={w1.get('event')} tail={w1.get('tail')!r})")
+                  f"cerebro_wait sees 'hello-pty' (event={w1.get('event')} tail={w1.get('tail')!r})")
             cursor1 = w1.get("cursor", 0)
 
             # send input + enter; the program reads it and prints got:<input>
-            s = client.call_tool("pty_send", {"sessionId": sid, "text": "world", "key": "enter"})
+            s = client.call_tool("cerebro_send", {"sessionId": sid, "text": "world", "key": "enter"})
             check(s.get("ok") and s.get("bytesWritten", 0) > 0,
-                  f"pty_send writes text+enter (got {s})")
+                  f"cerebro_send writes text+enter (got {s})")
 
-            # pty_wait is the event primitive: it captures its read cursor at
+            # cerebro_wait is the event primitive: it captures its read cursor at
             # call time, so if the child already finished before this call, its
             # tail may be empty and the event is `exit` (not `idle`). That is
             # correct event-driven behavior -- the response text is still in the
-            # buffer, so a controller reads it via pty_read(sinceCursor=cursor1).
-            w2 = client.call_tool("pty_wait", {
+            # buffer, so a controller reads it via cerebro_read(sinceCursor=cursor1).
+            w2 = client.call_tool("cerebro_wait", {
                 "sessionId": sid, "idleMs": 800, "timeoutMs": 15000,
             })
             check(w2.get("event") in ("idle", "exit", "match", "timeout"),
-                  f"pty_wait returns a valid event after send (got {w2})")
-            resp = client.call_tool("pty_read", {"sessionId": sid, "sinceCursor": cursor1})
+                  f"cerebro_wait returns a valid event after send (got {w2})")
+            resp = client.call_tool("cerebro_read", {"sessionId": sid, "sinceCursor": cursor1})
             check("got:world" in resp.get("text", ""),
-                  f"pty_read(sinceCursor) sees 'got:world' after send (got {resp})")
+                  f"cerebro_read(sinceCursor) sees 'got:world' after send (got {resp})")
 
             # wait for child exit (input() returned -> program ends -> exit 0)
-            w3 = client.call_tool("pty_wait", {
+            w3 = client.call_tool("cerebro_wait", {
                 "sessionId": sid, "idleMs": 0, "timeoutMs": 15000,
             })
             check(w3.get("event") == "exit" and w3.get("exitCode") == 0,
-                  f"pty_wait reports exit 0 (got {w3})")
+                  f"cerebro_wait reports exit 0 (got {w3})")
 
             # status reflects the dead session; close retires it (idempotent)
-            st = client.call_tool("pty_status", {"sessionId": sid})
+            st = client.call_tool("cerebro_status", {"sessionId": sid})
             check(st.get("alive") is False and st.get("exitCode") == 0,
-                  f"pty_status shows dead+exitCode 0 (got {st})")
-            cl = client.call_tool("pty_close", {"sessionId": sid})
-            check(cl.get("ok") is True, f"pty_close retires the session (got {cl})")
+                  f"cerebro_status shows dead+exitCode 0 (got {st})")
+            cl = client.call_tool("cerebro_close", {"sessionId": sid})
+            check(cl.get("ok") is True, f"cerebro_close retires the session (got {cl})")
 
-            # pty_list no longer includes it
-            lst = client.call_tool("pty_list", {})
+            # cerebro_list no longer includes it
+            lst = client.call_tool("cerebro_list", {})
             check(all(s.get("sessionId") != sid for s in lst.get("sessions", [])),
-                  f"pty_list omits the closed session (got {lst})")
+                  f"cerebro_list omits the closed session (got {lst})")
 
         # --- concurrency: many agents / many sessions at once is a hard
         # requirement. Spawn N sessions each sleeping S seconds, then fire N
-        # pty_wait calls CONCURRENTLY and assert the wall time is ~S (parallel),
+        # cerebro_wait calls CONCURRENTLY and assert the wall time is ~S (parallel),
         # not ~N*S (which is what would happen if tools ran serialized on the
         # event loop -- the FastMCP-sync-tool trap the async+threadpool design
         # exists to avoid). Margin is generous so this is not flaky on slow CI. ---
@@ -221,12 +221,12 @@ def main() -> None:
         sleepers = []
         with tempfile.TemporaryDirectory() as ccwd:
             for _ in range(N):
-                spn = client.call_tool("pty_spawn", {
+                spn = client.call_tool("cerebro_spawn", {
                     "command": PY, "args": ["-u", "-c", f"import time; time.sleep({S})"],
                     "cwd": ccwd,
                 })
                 sleepers.append(spn["sessionId"])
-            calls = [("tools/call", {"name": "pty_wait",
+            calls = [("tools/call", {"name": "cerebro_wait",
                       "arguments": {"sessionId": s, "idleMs": 0, "timeoutMs": 15000}})
                      for s in sleepers]
             t0 = _time.monotonic()
@@ -236,12 +236,12 @@ def main() -> None:
                                     if b.get("type") == "text")).get("exitCode")
                  for r in results]
         for s in sleepers:
-            client.call_tool("pty_close", {"sessionId": s})
+            client.call_tool("cerebro_close", {"sessionId": s})
         check(all(e == 0 for e in exits),
-              f"all {N} concurrent pty_wait calls saw exit 0 (got {exits})")
+              f"all {N} concurrent cerebro_wait calls saw exit 0 (got {exits})")
         # parallel ~ S (2s); serialized would be ~ N*S (8s). 3x single-time cap.
         check(wall < S * 3,
-              f"{N} concurrent pty_wait calls ran in parallel (wall {wall:.2f}s "
+              f"{N} concurrent cerebro_wait calls ran in parallel (wall {wall:.2f}s "
               f"< {S*3}s; serialized would be ~{N*S}s)")
     finally:
         client.close()

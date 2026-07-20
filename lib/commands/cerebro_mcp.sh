@@ -1,5 +1,5 @@
-# cerebro lib: commands/pty-mcp
-# `cerebro pty-mcp` starts the generic PTY MCP server (lib/python/pty_mcp_server.py)
+# cerebro lib: commands/cerebro-mcp
+# `cerebro cerebro-mcp` starts the generic PTY MCP server (lib/python/cerebro_mcp_server.py)
 # over stdio on the official `mcp` Python SDK. The server owns long-lived
 # pseudo-terminals in its own process and exposes them as MCP tools so a
 # controller (another agent, an editor, a test) can spawn an interactive TTY
@@ -9,10 +9,10 @@
 # Sourced by bin/cerebro; not meant to be executed directly.
 
 # Like `cerebro acp`, this is editor/client-driven and non-interactive: stdin and
-# stdout are the MCP JSON-RPC pipe, not a terminal. So cmd_pty_mcp deliberately
+# stdout are the MCP JSON-RPC pipe, not a terminal. So cmd_cerebro_mcp deliberately
 # does NOT call require_interactive.
 
-# There is intentionally NO `pty-mcp restart` subcommand (unlike `cerebro acp
+# There is intentionally NO `cerebro-mcp restart` subcommand (unlike `cerebro acp
 # restart`). ACP restart exists to (a) kill its proxy so the editor respawns it
 # with fresh config.json/backend env, and (b) reap orphan upstream children that
 # outlive a dead proxy. Neither applies here: the PTY server reads no server-wide
@@ -23,13 +23,13 @@
 # client (session restart), not a cerebro subcommand. See lib/commands/acp.sh
 # for the contrast.
 
-# pty_mcp_require_python_deps -- locate a Python >=3.10 for the `mcp` SDK
+# cerebro_mcp_require_python_deps -- locate a Python >=3.10 for the `mcp` SDK
 # (the official mcp Python SDK needs >=3.10), preferring Homebrew python3
 # (/opt/homebrew/bin/python3) since macOS system python3 is 3.9, and ensure the
 # SDK is importable (auto-installing to the user site if missing). Mirrors
 # acp_require_python_deps (lib/commands/acp.sh) with `import mcp` substituted.
-# Sets CEREBRO_PTY_MCP_PYTHON (exported).
-pty_mcp_require_python_deps() {
+# Sets CEREBRO_MCP_PYTHON (exported).
+cerebro_mcp_require_python_deps() {
   local py="" v major minor
   for cand in /opt/homebrew/bin/python3 python3 python3.13 python3.12 python3.11 python3.10; do
     command -v "$cand" >/dev/null 2>&1 || continue
@@ -41,31 +41,31 @@ pty_mcp_require_python_deps() {
       fi
     fi
   done
-  [[ -n "$py" ]] || die "cerebro pty-mcp needs Python >=3.10 (for the mcp SDK). None found on PATH. Install with: brew install python"
-  export CEREBRO_PTY_MCP_PYTHON="$py"
+  [[ -n "$py" ]] || die "cerebro cerebro-mcp needs Python >=3.10 (for the mcp SDK). None found on PATH. Install with: brew install python"
+  export CEREBRO_MCP_PYTHON="$py"
   if ! "$py" -c 'import mcp' >/dev/null 2>&1; then
-    warn "cerebro pty-mcp: installing mcp (Python SDK) for $py ..."
+    warn "cerebro cerebro-mcp: installing mcp (Python SDK) for $py ..."
     if ! "$py" -m pip install --user --break-system-packages mcp >/dev/null 2>&1; then
-      die "cerebro pty-mcp: failed to install mcp. Install manually:
+      die "cerebro cerebro-mcp: failed to install mcp. Install manually:
     $py -m pip install --user --break-system-packages mcp"
     fi
   fi
 }
 
-# cmd_pty_mcp -- start the cerebro PTY MCP server over stdio. Probe the python
-# dep, export the cerebro env so programs spawned later via pty_spawn inherit
+# cmd_cerebro_mcp -- start the cerebro PTY MCP server over stdio. Probe the python
+# dep, export the cerebro env so programs spawned later via cerebro_spawn inherit
 # the user's cerebro home / backend / model defaults (harmless for non-cerebro
 # programs, helpful when the spawned program IS cerebro), then exec the server.
 # The server inherits stdio directly: stdin/stdout = MCP JSON-RPC pipe to the
 # client, stderr = diagnostics.
-cmd_pty_mcp() {
-  pty_mcp_require_python_deps
+cmd_cerebro_mcp() {
+  cerebro_mcp_require_python_deps
   # config.sh sets the CEREBRO_* vars as plain shell variables (only
   # CEREBRO_HOME defaults there); export them so the python server's env carries
-  # them and pty_spawn'd children inherit them (os.environ.copy() in the server).
+  # them and cerebro_spawn'd children inherit them (os.environ.copy() in the server).
   export CEREBRO_HOME \
          CEREBRO_BACKEND CEREBRO_REVIEW_BACKEND \
          CEREBRO_MODEL CEREBRO_DEFAULT_MODEL CEREBRO_REVIEW_MODEL \
          CEREBRO_CLAUDE_BASE_URL CEREBRO_CLAUDE_AUTH_TOKEN
-  exec "$CEREBRO_PTY_MCP_PYTHON" "$CEREBRO_LIB_DIR/python/pty_mcp_server.py"
+  exec "$CEREBRO_MCP_PYTHON" "$CEREBRO_LIB_DIR/python/cerebro_mcp_server.py"
 }
