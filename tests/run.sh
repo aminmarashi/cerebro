@@ -3623,6 +3623,101 @@ else
   failures+=("174 materialise_home overlays dir")
 fi
 
+# --- 174b. materialise_home writes BOTH a claude skill file (with name:
+# frontmatter) and an opencode guide copy (body only, no frontmatter) for every
+# shipped skill, all non-empty. The skill keeps the cerebro-<topic> dir/name;
+# the guide drops the cerebro- prefix so the prompt stubs ($CEREBRO_HOME/guides/
+# <topic>.md) point at the real file. ---
+SK_SHIPPED=(cerebro-commands cerebro-suites cerebro-pair cerebro-improve cerebro-child-flow cerebro-audit-gate)
+SK_GUIDES=(commands suites pair improve child-flow audit-gate)
+sk174b_ok=1
+for i in "${!SK_SHIPPED[@]}"; do
+  t="${SK_SHIPPED[$i]}"; g="${SK_GUIDES[$i]}"
+  s="$MHOME/.claude/skills/$t/SKILL.md"
+  gp="$MHOME/guides/$g.md"
+  if [[ ! -s "$s" ]] || ! grep -q '^name:' "$s" \
+     || [[ ! -s "$gp" ]] || [[ "$(grep -c '^---$' "$gp")" -ne 0 ]]; then
+    sk174b_ok=0
+    printf 'FAIL  174b detail skill/guide mismatch: %s [skill=%s guide=%s guide_fm=%s]\n' \
+      "$t" "$([[ -s "$s" ]] && echo y || echo n)" \
+      "$([[ -s "$gp" ]] && echo y || echo n)" "$(grep -c '^---$' "$gp" 2>/dev/null)"
+    break
+  fi
+done
+if (( sk174b_ok )); then
+  printf 'PASS  174b materialise_home writes skills + guides for every shipped skill\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  174b materialise_home skill/guide materialisation incomplete\n'; fail=$((fail + 1))
+  failures+=("174b materialise_home skills+guides")
+fi
+
+# --- 174c. the materialised system-prompt.md is the trimmed prompt: under a
+# sane line ceiling, carries every stub's guide path token (so stubs are not
+# dangling), and does NOT contain the moved sections' distinctive headings (so
+# the move actually happened). ---
+sp174c="$MHOME/system-prompt.md"
+sp_lines="$(wc -l < "$sp174c" | tr -d ' ')"
+sp174c_ok=1
+if (( sp_lines >= 900 )); then
+  printf 'FAIL  174c system-prompt too long: %s lines\n' "$sp_lines"; sp174c_ok=0
+fi
+for g in "${SK_GUIDES[@]}"; do
+  if ! grep -q "guides/$g.md" "$sp174c"; then
+    printf 'FAIL  174c system-prompt missing stub token guides/%s.md\n' "$g"; sp174c_ok=0; break
+  fi
+done
+if (( sp174c_ok )); then
+  for h in '## The workable-state invariant' '## Slow loop (meta-skill improvement)' '# Pair programming mode'; do
+    if grep -qF "$h" "$sp174c"; then
+      printf 'FAIL  174c system-prompt still contains moved heading: %s\n' "$h"; sp174c_ok=0; break
+    fi
+  done
+fi
+if (( sp174c_ok )); then
+  printf 'PASS  174c system-prompt trimmed (<900 lines), stubs present, moved sections gone\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  174c system-prompt trim/stub/move check failed [lines=%s]\n' "$sp_lines"; fail=$((fail + 1))
+  failures+=("174c system-prompt trim/stub/move")
+fi
+
+# --- 174d. the orchestrator's claude tool surface includes Skill: both the
+# claude_orchestrator_agent_file tools: frontmatter (cerebro acp / direct
+# claude --agent) and the three backend-claude.sh --allowedTools launch sites. ---
+agent174d="$(ov_fn claude_orchestrator_agent_file 2>/dev/null)"
+bc174d="$here/../lib/backend-claude.sh"
+if [[ "$agent174d" == *", Skill,"* ]] \
+   && [[ "$(grep -c 'Skill Write(/tmp/cerebro-$sid/\*\*)' "$bc174d")" -eq 3 ]]; then
+  printf 'PASS  174d orchestrator claude tool surface includes Skill (agent file + 3 launch sites)\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  174d Skill missing from orchestrator surface [agent_has_Skill=%s launch_sites=%s]\n' \
+    "$([[ "$agent174d" == *", Skill,"* ]] && echo y || echo n)" \
+    "$(grep -c 'Skill Write(/tmp/cerebro-$sid/\*\*)' "$bc174d" 2>/dev/null)"; fail=$((fail + 1))
+  failures+=("174d orchestrator Skill tool surface")
+fi
+
+# --- 174e. every shipped SKILL.md has valid frontmatter (starts with ---, has
+# name: and description:) and the opencode guide copy contains NO frontmatter
+# --- block (the body-only materialisation is clean). ---
+sk174e_ok=1
+for i in "${!SK_SHIPPED[@]}"; do
+  t="${SK_SHIPPED[$i]}"; g="${SK_GUIDES[$i]}"
+  s="$here/../lib/payloads/skills/$t/SKILL.md"
+  first="$(head -1 "$s")"
+  if [[ "$first" != "---" ]] || ! grep -q '^name:' "$s" || ! grep -q '^description:' "$s"; then
+    printf 'FAIL  174e skill %s bad frontmatter [first=%s]\n' "$t" "$first"; sk174e_ok=0; break
+  fi
+  gp="$MHOME/guides/$g.md"
+  if [[ "$(grep -c '^---$' "$gp")" -ne 0 ]]; then
+    printf 'FAIL  174e guide %s still carries frontmatter ---\n' "$g"; sk174e_ok=0; break
+  fi
+done
+if (( sk174e_ok )); then
+  printf 'PASS  174e shipped SKILL.md frontmatter valid; guide copies frontmatter-free\n'; pass=$((pass + 1))
+else
+  printf 'FAIL  174e skill frontmatter / guide frontmatter-free check failed\n'; fail=$((fail + 1))
+  failures+=("174e skill frontmatter + guide clean")
+fi
+
 # --- 175. improve with no repo arg / non-absolute path errors with usage. ---
 STDERR_CONTAINS="usage: cerebro improve" \
 run_case 175 "improve no repo arg rejected" 1 -- "$CEREBRO_BIN" improve

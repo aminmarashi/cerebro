@@ -12,6 +12,24 @@
 
 cerebro_payloads_dir() { printf '%s\n' "$CEREBRO_LIB_DIR/payloads"; }
 
+# The directory holding the shipped Claude Code skill files
+# (lib/payloads/skills/<topic>/SKILL.md). materialise_home copies each into
+# $CEREBRO_HOME/.claude/skills/<topic>/SKILL.md so the orchestrator (which runs
+# with cwd $CEREBRO_HOME) discovers them as project skills and can load a body
+# on demand via the Skill tool, keeping the always-loaded orchestrator prompt
+# small. The same source is also materialised as a plain guide (frontmatter
+# stripped) under $CEREBRO_HOME/guides/<topic>.md for the opencode backend,
+# which has no Skill tool / SKILL.md format and instead Reads the guide file.
+cerebro_skills_dir() { printf '%s\n' "$CEREBRO_LIB_DIR/payloads/skills"; }
+
+# cerebro_skill_body <skill-md-path> -- print only the body of a SKILL.md, i.e.
+# everything after the closing `---` of the YAML frontmatter. Used to derive
+# the opencode guide copy from the same source as the claude skill (so the two
+# never diverge). A file with no frontmatter prints verbatim.
+cerebro_skill_body() {
+  awk 'BEGIN{f=0} /^---$/{if(!f){f=1;next};if(f==1){f=2;next}} f==2||f==0{print}' "$1"
+}
+
 # The session-binding plugin for opencode. Records the opencode-assigned session
 # id into the active cerebro session's metadata (so `cerebro --resume` can reopen
 # the same conversation) and appends each user prompt to the transcript (so
@@ -326,7 +344,7 @@ claude_orchestrator_agent_file() {
 ---
 name: cerebro-orchestrator
 description: cerebro orchestrator -- drives the plan/execute/review loop via cerebro subcommands
-tools: Read, Grep, Glob, WebSearch, WebFetch, Bash(cerebro:*), Write(/tmp/cerebro-*/**), Edit(/tmp/cerebro-*/**), mcp__playwright__*
+tools: Read, Grep, Glob, WebSearch, WebFetch, Bash(cerebro:*), Write(/tmp/cerebro-*/**), Edit(/tmp/cerebro-*/**), Skill, mcp__playwright__*
 ---
 EOF
   cat "$(cerebro_payloads_dir)/system-prompt.md"
